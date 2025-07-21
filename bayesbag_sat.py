@@ -34,7 +34,7 @@ def main():
             for j in range(n_schools):
                 pm.Normal(f"y_obs_{j}",mu=theta[j],sigma=1.0,observed=synthetic[j])
                 
-            trace = pm.sample(2000, tune=1000, chains=2, target_accept=0.95, return_inferencedata=True)
+            trace = pm.sample(2000, tune=1000, chains=4, target_accept=0.95, return_inferencedata=True)
             return trace
 
     # def bayesbag(y_obs, sigma_obs, B=100, mfactor=1):
