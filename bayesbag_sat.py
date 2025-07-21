@@ -86,7 +86,8 @@ def main():
     plt.xticks(np.arange(8), labels=schools)
     plt.legend()
     plt.grid(True)
-    plt.show()
+    # plt.show()
+    plt.savefig("sat_means.png")
 
     # Plot std deviations
     plt.figure(figsize=(10, 6))
@@ -98,7 +99,8 @@ def main():
     plt.xticks(np.arange(8), labels=schools)
     plt.legend()
     plt.grid(True)
-    plt.show()
+    # plt.show()
+    plt.savefig("sat_std.png")
 
     x = np.arange(1, len(y)+1)
     plt.errorbar(x, theta_standard_mean, yerr=0, fmt='o', label='Standard')
@@ -107,7 +109,8 @@ def main():
     plt.xlabel("School")
     plt.ylabel("Estimated Effect")
     plt.title("Standard vs BayesBag Inference")
-    plt.show()
+    # plt.show()
+    plt.savefig("sat_comparison")
 
     # Mismatch index
     var_std = np.sum(theta_standard_std ** 2)
