@@ -6,6 +6,10 @@ import pandas as pd
 from scipy.stats import norm
 from tqdm import tqdm
 
+import os
+output_dir = "plots"
+os.makedirs(output_dir, exist_ok=True)
+
 def main():
     y = np.array([28, 8, -3, 7, -1, 1, 18, 12])
     sigma = np.sqrt(np.array([15, 10, 16, 11, 9, 11, 10, 18]))
@@ -77,7 +81,7 @@ def main():
     theta_bagged_std = bagged_samples.std(axis=0)
 
     # Plot means
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(7,5))
     plt.plot(theta_standard_mean, 'o-', label="Standard Posterior Mean", color='blue')
     plt.plot(theta_bagged_mean, 's--', label="BayesBag Posterior Mean", color='red')
     plt.xlabel("School Index")
@@ -87,10 +91,12 @@ def main():
     plt.legend()
     plt.grid(True)
     # plt.show()
-    plt.savefig("sat_means.png")
+    # plt.savefig("sat_means.png")
+    plt.savefig(os.path.join(output_dir, "sat_means.pdf"), bbox_inches="tight")
+    plt.close()
 
     # Plot std deviations
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(7,5))
     plt.plot(theta_standard_std, 'o-', label="Standard Posterior Std", color='blue')
     plt.plot(theta_bagged_std, 's--', label="BayesBag Posterior Std", color='red')
     plt.xlabel("School Index")
@@ -100,9 +106,12 @@ def main():
     plt.legend()
     plt.grid(True)
     # plt.show()
-    plt.savefig("sat_std.png")
+    # plt.savefig("sat_std.png")
+    plt.savefig(os.path.join(output_dir, "sat_std.pdf"), bbox_inches="tight")
+    plt.close()
 
     x = np.arange(1, len(y)+1)
+    plt.figure(figsize=(7,5))
     plt.errorbar(x, theta_standard_mean, yerr=0, fmt='o', label='Standard')
     plt.errorbar(x, theta_bagged_mean, yerr=theta_bagged_std, fmt='o', label='BayesBag')
     plt.legend()
@@ -110,7 +119,9 @@ def main():
     plt.ylabel("Estimated Effect")
     plt.title("Standard vs BayesBag Inference")
     # plt.show()
-    plt.savefig("sat_comparison")
+    # plt.savefig("sat_comparison")
+    plt.savefig(os.path.join(output_dir, "sat_comparison.pdf"), bbox_inches="tight")
+    plt.close()
 
     # Mismatch index
     var_std = np.sum(theta_standard_std ** 2)
