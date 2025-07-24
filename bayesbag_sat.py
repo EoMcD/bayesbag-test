@@ -41,7 +41,7 @@ def main():
             
             y_obs = pm.Normal("y_obs", mu=theta[:,None], sigma=sigma[:,None], observed=synthetic) # synthetic data, new approach
                 
-            trace = pm.sample(2000, tune=1000, chains=4, target_accept=0.95, return_inferencedata=True)
+            trace = pm.sample(8000, tune=2000, chains=4, cores=2 target_accept=0.95, return_inferencedata=True)
             return trace
 
     # def bayesbag(y_obs, sigma_obs, B=100, mfactor=1):
