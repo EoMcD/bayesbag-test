@@ -34,9 +34,12 @@ def main():
             # theta = pm.Normal("theta", mu=mu, sigma=tau, shape=len(y_obs))
             theta = pm.Normal("theta", mu=mu, sigma=tau, shape=n_schools)
             
-            # y_obs_ = pm.Normal("y_obs", mu=theta, sigma=sigma_obs, observed=y_obs)
-            for j in range(n_schools):
-                pm.Normal(f"y_obs_{j}",mu=theta[j],sigma=1.0,observed=synthetic[j])
+            # y_obs_ = pm.Normal("y_obs", mu=theta, sigma=sigma_obs, observed=y_obs) # original data
+            
+            # for j in range(n_schools):
+            #     pm.Normal(f"y_obs_{j}",mu=theta[j],sigma=1.0,observed=synthetic[j])
+            
+            y_obs = pm.Normal("y_obs", mu=theta[:,None], sigma=sigma[:,None], observed=synthetic) # synthetic data, new approach
                 
             trace = pm.sample(2000, tune=1000, chains=4, target_accept=0.95, return_inferencedata=True)
             return trace
