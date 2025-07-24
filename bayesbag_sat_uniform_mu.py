@@ -43,7 +43,7 @@ def main():
             
             y_obs = pm.Normal("y_obs", mu=theta[:,None], sigma=sigma[:,None], observed=synthetic) # synthetic data, new approach
                 
-            trace = pm.sample(8000, tune=2000, chains=4, cores=2 target_accept=0.95, return_inferencedata=True)
+            trace = pm.sample(8000, tune=2000, chains=4, cores=2, target_accept=0.95, return_inferencedata=True)
             return trace
 
     # def bayesbag(y_obs, sigma_obs, B=100, mfactor=1):
@@ -97,7 +97,7 @@ def main():
     plt.grid(True)
     # plt.show()
     # plt.savefig("sat_means.png")
-    plt.savefig(os.path.join(output_dir, "sat_means_uniform.pdf"), bbox_inches="tight")
+    plt.savefig(os.path.join(output_dir, "sat_means_uniform_mu.pdf"), bbox_inches="tight")
     plt.close()
 
     # Plot std deviations
@@ -112,7 +112,7 @@ def main():
     plt.grid(True)
     # plt.show()
     # plt.savefig("sat_std.png")
-    plt.savefig(os.path.join(output_dir, "sat_std_uniform.pdf"), bbox_inches="tight")
+    plt.savefig(os.path.join(output_dir, "sat_std_uniform_mu.pdf"), bbox_inches="tight")
     plt.close()
 
     x = np.arange(1, len(y)+1)
@@ -125,7 +125,7 @@ def main():
     plt.title("Standard vs BayesBag Inference")
     # plt.show()
     # plt.savefig("sat_comparison")
-    plt.savefig(os.path.join(output_dir, "sat_comparison_uniform.pdf"), bbox_inches="tight")
+    plt.savefig(os.path.join(output_dir, "sat_comparison_uniform_mu.pdf"), bbox_inches="tight")
     plt.close()
 
     # Mismatch index
