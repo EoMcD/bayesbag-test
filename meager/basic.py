@@ -22,7 +22,6 @@ data["t"] = data["t"].astype("category")
 
 # initial plotting
 sns.displot(
-sns.displot(
     data=data[(data["y"] > -5000) & (data["y"] < 5000)],
     x="y",
     hue="t",
