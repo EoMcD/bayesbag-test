@@ -5,11 +5,11 @@ functions {
     real beta_xy;
     real lp;
     vector[P] beta; 
-    beta[1] <- mu_k;
-    beta[2] <- tau_k;  // this works because P = 2 here
-    beta_xy <- dot_product(xy_sum, beta);
-    lp <- -.5*(y_sq_sum - 2*beta_xy + sum(beta * beta' .* xx_sum))/sigma^2;
-    lp <- lp - .5*N*log(sigma^2);
+    beta[1] = mu_k;
+    beta[2] = tau_k;  // this works because P = 2 here
+    beta_xy = dot_product(xy_sum, beta);
+    lp = -.5*(y_sq_sum - 2*beta_xy + sum(beta * beta' .* xx_sum))/sigma^2;
+    lp = lp - .5*N*log(sigma^2);
     return lp;
   }
 }
@@ -33,19 +33,19 @@ transformed data {
   int s;
   vector[P] x;
   // initialize everything to zero
-  N_k <- rep_array(0, K);
-  y_sq_sum <- rep_array(0.0, K);
-  xy_sum <- rep_array(rep_vector(0.0, P), K);
-  xx_sum <- rep_array(rep_matrix(0.0, P, P), K);
+  N_k = rep_array(0, K);
+  y_sq_sum = rep_array(0.0, K);
+  xy_sum = rep_array(rep_vector(0.0, P), K);
+  xx_sum = rep_array(rep_matrix(0.0, P, P), K);
   // x[1] is always 1
-  x[1] <- 1.0;
+  x[1] = 1.0;
   for (n in 1:N) {
-    s <- site[n];
-    x[2] <- ITT[n];
-    N_k[s] <- N_k[s] + 1;
-    y_sq_sum[s] <- y_sq_sum[s] + y[n]^2;
-    xy_sum[s] <- xy_sum[s] + y[n]*x;
-    xx_sum[s] <- xx_sum[s] + x*x';
+    s = site[n];
+    x[2] = ITT[n];
+    N_k[s] = N_k[s] + 1;
+    y_sq_sum[s] = y_sq_sum[s] + y[n]^2;
+    xy_sum[s] = xy_sum[s] + y[n]*x;
+    xx_sum[s] = xx_sum[s] + x*x';
   }
 }
 
@@ -90,8 +90,8 @@ generated quantities{
   real predicted_mu_k; 
   real signal_noise_ratio_mu;
   real signal_noise_ratio_tau;
-  predicted_tau_k <- normal_rng(tau, sigma_tau);
-  predicted_mu_k <- normal_rng(mu, sigma_mu);
-  signal_noise_ratio_tau <- tau/sigma_tau;
-  signal_noise_ratio_mu <- mu/sigma_mu;
+  predicted_tau_k = normal_rng(tau, sigma_tau);
+  predicted_mu_k = normal_rng(mu, sigma_mu);
+  signal_noise_ratio_tau = tau/sigma_tau;
+  signal_noise_ratio_mu = mu/sigma_mu;
 }
