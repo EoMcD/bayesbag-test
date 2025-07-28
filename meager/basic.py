@@ -6,6 +6,7 @@ from cmdstanpy import CmdStanModel
 import numpy as np
 import pickle
 import os
+from sklearn.utils import resample
 
 os.makedirs("figs", exist_ok=True)
 os.makedirs("out", exist_ok=True)
@@ -22,7 +23,7 @@ data["t"] = data["t"].astype("category")
 
 # initial plotting
 sns.displot(
-    data=data[(data["y"] > -5000) & (data["y"] < 5000)],
+    data=data[(data["y"] > -2000) & (data["y"] < 2000)],
     x="y",
     hue="t",
     kind="hist",
@@ -117,22 +118,25 @@ def fit_meager(data, n_samp=4000, n_warmup=2000, thin=1):
 print("Models made")
 
 # --- BAYESBAG PART, WIP ---
-# n_boot = 20
-# boot_fits = []
-# boot_data = []
+n_boot = 20
+boot_fits = []
+boot_data = []
 
-# for i in range(n_boot):
-#     print(f"Running bootstrap {i+1} of {n_boot}")
+for i in range(n_boot):
+    print(f"Running bootstrap {i+1} of {n_boot}")
 
-#     boot_i = (
-#         data.groupby("g", group_keys=False)
-#         .apply(lambda g: resample(g, replace=True))
-#         .reset_index(drop=True)
-#     )
+    boot_i = (
+        data.groupby("g", group_keys=False)
+        .apply(lambda g: resample(g, replace=True))
+        .reset_index(drop=True)
+    )
 
-#     boot_data.append(boot_i)
-#     fit = fit_meager(boot_i)
-#     boot_fits.append(fit)
+    boot_data.append(boot_i)
+    fit = fit_meager(boot_i)
+    boot_fits.append(fit)
+
+with open("out/microcredit_bayesbag.pkl", "wb") as f:
+    pickle.dump({"bayesbag": boot_fits, "boot_data": boot_data}, f)
 
 with open("out/microcredit.pkl", "wb") as f:
     pickle.dump({"mg": fit_meager(data)}, f)
