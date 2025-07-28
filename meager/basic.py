@@ -57,7 +57,7 @@ def fit_meager(data, n_samp=1000, n_warmup=10000, thin=10):
         iter_sampling=n_samp,
         iter_warmup=n_warmup,
         thin=thin,
-        refresh=0
+        refresh=1
     )
 
     draws = fit.draws_pd()
