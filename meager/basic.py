@@ -83,6 +83,7 @@ def fit_meager(data, n_samp=1000, n_warmup=10000, thin=10):
     # Extract theta
     theta_vars = ["mu_k", "tau_k", "sigma_y_k"]
     K = stan_data["K"]
+    
     # theta_df = pd.DataFrame({
     #     "j": np.repeat(np.arange(1, n_draws + 1), K),
     #     "k": np.tile(np.arange(1, K + 1), n_draws),
@@ -90,7 +91,24 @@ def fit_meager(data, n_samp=1000, n_warmup=10000, thin=10):
     #     "tau_k": draws.filter(regex=r"tau_k\\[\\d+\\]").values.flatten(),
     #     "sigma_k": draws.filter(regex=r"sigma_y_k\\[\\d+\\]").values.flatten(),
     # })
-    theta_df = pd.DataFrame({"j": np.arange(1, n_draws + 1)}) # alternative approach to avoid data length mismatches
+    
+    # theta_df = pd.DataFrame({"j": np.arange(1, n_draws + 1)}) # alternative approach to avoid data length mismatches
+
+    mu_k = draws.filter(regex=r"^mu_k\[\d+\]$").values
+    tau_k = draws.filter(regex=r"^tau_k\[\d+\]$").values
+    sigma_k = draws.filter(regex=r"^sigma_y_k\[\d+\]$").values
+
+    assert mu_k.shape == (n_draws, K), f"mu_k shape mismatch: {mu_k.shape} vs expected ({n_draws}, {K})"
+    assert tau_k.shape == (n_draws, K), f"tau_k shape mismatch: {tau_k.shape}"
+    assert sigma_k.shape == (n_draws, K), f"sigma_k shape mismatch: {sigma_k.shape}"
+
+    theta_df = pd.DataFrame({
+        "j": np.repeat(np.arange(1, n_draws + 1), K),
+        "k": np.tile(np.arange(1, K + 1), n_draws),
+        "mu_k": mu_k.flatten(),
+        "tau_k": tau_k.flatten(),
+        "sigma_k": sigma_k.flatten()
+    })
     
     return {"lambda": lambda_df, "theta": theta_df}
 
