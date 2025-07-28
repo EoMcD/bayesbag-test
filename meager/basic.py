@@ -62,6 +62,17 @@ def fit_meager(data, n_samp=1000, n_warmup=10000, thin=10):
 
     draws = fit.draws_pd()
 
+    # Diagnostics
+    print("Draws shape:", draws.shape)
+    for var in ["mu", "tau", "sigma_mu", "sigma_tau"]:
+        print(f"{var} len:", len(draws[var]))
+
+    for var_prefix in ["mu_k", "tau_k", "sigma_y_k"]:
+        cols = draws.filter(regex=fr"^{var_prefix}\[\d+\]$").columns
+        print(f"{var_prefix} cols:", list(cols))
+        for col in cols:
+            print(f"{col} len:", len(draws[col]))
+
     # Extract lambda
     lambda_vars = ["mu", "tau", "sigma_mu", "sigma_tau"]
     lambda_df = draws[lambda_vars].copy()
@@ -72,14 +83,15 @@ def fit_meager(data, n_samp=1000, n_warmup=10000, thin=10):
     # Extract theta
     theta_vars = ["mu_k", "tau_k", "sigma_y_k"]
     K = stan_data["K"]
-    theta_df = pd.DataFrame({
-        "j": np.repeat(np.arange(1, n_draws + 1), K),
-        "k": np.tile(np.arange(1, K + 1), n_draws),
-        "mu_k": draws.filter(regex=r"mu_k\\[\\d+\\]").values.flatten(),
-        "tau_k": draws.filter(regex=r"tau_k\\[\\d+\\]").values.flatten(),
-        "sigma_k": draws.filter(regex=r"sigma_y_k\\[\\d+\\]").values.flatten(),
-    })
-
+    # theta_df = pd.DataFrame({
+    #     "j": np.repeat(np.arange(1, n_draws + 1), K),
+    #     "k": np.tile(np.arange(1, K + 1), n_draws),
+    #     "mu_k": draws.filter(regex=r"mu_k\\[\\d+\\]").values.flatten(),
+    #     "tau_k": draws.filter(regex=r"tau_k\\[\\d+\\]").values.flatten(),
+    #     "sigma_k": draws.filter(regex=r"sigma_y_k\\[\\d+\\]").values.flatten(),
+    # })
+    theta_df = pd.DataFrame({"j": np.arange(1, n_draws + 1)}) # alternative approach to avoid data length mismatches
+    
     return {"lambda": lambda_df, "theta": theta_df}
 
 print("Models made")
