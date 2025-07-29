@@ -65,7 +65,7 @@ def contaminate_data(df, frac=0.1, seed=42):
         df_contaminated.at[i, "bikes"] = n - y  # flip count
     return df_contaminated
 
-def fit_pymc_model(y_obs, n_obs, block_idx, num_blocks, return_model=False):
+def fit_pymc_model(y_obs, n_obs, category_idx, num_categories, return_model=False):
     with pm.Model() as model:
         log_alpha = pm.Normal("log_alpha", mu=0, sigma=1.5)
         log_beta = pm.Normal("log_beta", mu=0, sigma=1.5)
@@ -73,23 +73,23 @@ def fit_pymc_model(y_obs, n_obs, block_idx, num_blocks, return_model=False):
         alpha = pm.Deterministic("alpha", pm.math.exp(log_alpha))
         beta = pm.Deterministic("beta", pm.math.exp(log_beta))
 
-        theta = pm.Beta("theta", alpha=alpha, beta=beta, shape=num_blocks)
-        y_likelihood = pm.Binomial("y_likelihood", n=n_obs, p=theta[block_idx], observed=y_obs)
+        theta = pm.Beta("theta", alpha=alpha, beta=beta, shape=num_categories)
+        y_likelihood = pm.Binomial("y_likelihood", n=n_obs, p=theta[category_idx], observed=y_obs)
 
         trace = pm.sample(4000, tune=2000, chains=4, cores=2, target_accept=0.95, return_inferencedata=True)
 
     return (trace, model) if return_model else trace
 
-def bayesbag(y_obs, n_obs, block_idx, num_blocks, b=100, mfactor=1):
+def bayesbag(y_obs, n_obs, category_idx, num_categories, b=100, mfactor=1):
     bagged_thetas = []
     m = int(mfactor * len(y_obs))
     for _ in tqdm(range(b), desc="BayesBag iterations"):
         indices = np.random.choice(len(y_obs), size=m, replace=True)
         y_boot = y_obs[indices]
         n_boot = n_obs[indices]
-        idx_boot = block_idx[indices]
-
-        trace = fit_pymc_model(y_boot, n_boot, idx_boot, num_blocks)
+        idx_boot = category_idx[indices]
+        
+        trace = fit_pymc_model(y_boot, n_boot, idx_boot, num_categories)
         mean_theta = trace.posterior["theta"].mean(dim=["chain", "draw"]).values
         bagged_thetas.append(mean_theta)
     return np.array(bagged_thetas)
@@ -153,10 +153,12 @@ def plot_bayesbag_results(
 def run_pipeline(df, label_prefix="Clean"):
     y_obs = np.array(df["bikes"])
     n_obs = np.array(df["total"])
-    block_idx = np.array(df["block_idx"])
-    num_blocks = df["block_idx"].nunique()
+    df["category_idx"] = pd.factorize(df["category"])[0]
+    category_idx = np.array(df["category_idx"])           
+    num_categories = df["category_idx"].nunique()
 
-    trace, model = fit_pymc_model(y_obs, n_obs, block_idx, num_blocks, return_model=True)
+    # --- Standard Posterior ---
+    trace, model = fit_pymc_model(y_obs, n_obs, category_idx, num_categories, return_model=True)
     theta_standard_mean = trace.posterior["theta"].mean(dim=["chain", "draw"]).values
     theta_standard_std = trace.posterior["theta"].std(dim=["chain", "draw"]).values
 
@@ -165,7 +167,7 @@ def run_pipeline(df, label_prefix="Clean"):
     az.to_netcdf(trace, trace_path)
 
     # --- BayesBag Posterior ---
-    bagged_theta_samples = bayesbag(y_obs, n_obs, block_idx, num_blocks, b=100)
+    bagged_theta_samples = bayesbag(y_obs, n_obs, category_idx, num_categories, b=100)
     theta_bagged_mean = bagged_theta_samples.mean(axis=0)
     theta_bagged_std = bagged_theta_samples.std(axis=0)
 
