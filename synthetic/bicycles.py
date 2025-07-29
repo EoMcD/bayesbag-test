@@ -8,6 +8,7 @@ import os
 
 output_dir = "figs"
 os.makedirs(output_dir, exist_ok=True)
+os.makedirs("out", exist_ok=True)
 
 def load_bike_data():
     data = {
@@ -52,14 +53,17 @@ def generate_synthetic_from_counts(df):
         synthetic_data.append(group_data)
     return synthetic_data
 
-def contaminate_data(synthetic_data, flip_prob=0.1): # WIP
-    contaminated = []
-    for group_data in synthetic_data:
-        contaminated_group = group_data.copy()
-        flip_mask = np.random.rand(len(group_data)) < flip_prob
-        contaminated_group[flip_mask] = 1 - contaminated_group[flip_mask]
-        contaminated.append(contaminated_group)
-    return contaminated
+def contaminate_data(df, frac=0.1, seed=42):
+    np.random.seed(seed)
+    df_contaminated = df.copy()
+    n_rows = len(df)
+    contam_idx = np.random.choice(n_rows, size=int(frac * n_rows), replace=False)
+
+    for i in contam_idx:
+        y = df_contaminated.at[i, "bikes"]
+        n = df_contaminated.at[i, "total"]
+        df_contaminated.at[i, "bikes"] = n - y  # flip count
+    return df_contaminated
 
 def fit_pymc_model(y_obs, n_obs, block_idx, num_blocks, return_model=False):
     with pm.Model() as model:
@@ -90,12 +94,22 @@ def bayesbag(y_obs, n_obs, block_idx, num_blocks, b=100, mfactor=1):
         bagged_thetas.append(mean_theta)
     return np.array(bagged_thetas)
 
-def plot_bayesbag_results(bagged_ps, label, filename, group_labels=None):
+def plot_bayesbag_results(
+    bagged_ps,
+    theta_standard_mean,
+    theta_standard_std,
+    theta_bagged_mean,
+    theta_bagged_std,
+    label,
+    base_filename,
+    group_labels=None
+):
+    x = np.arange(len(theta_standard_mean))
+
+    # --- Plot 1: BayesBag error bars ---
+    plt.figure(figsize=(12, 5))
     mean_estimates = np.mean(bagged_ps, axis=0)
     std_estimates = np.std(bagged_ps, axis=0)
-
-    plt.figure(figsize=(12, 5))
-    x = np.arange(len(mean_estimates))
     plt.errorbar(x, mean_estimates, yerr=std_estimates, fmt='o', label=label, capsize=5)
     plt.ylim(0, 1)
     plt.xlabel("Group")
@@ -105,69 +119,84 @@ def plot_bayesbag_results(bagged_ps, label, filename, group_labels=None):
         plt.xticks(x, group_labels, rotation=90)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, filename))
+    plt.savefig(os.path.join(output_dir, f"{base_filename}_bagged_errorbars.png"))
     plt.close()
 
-    # ---- Plot Posterior Means ----
+    # --- Plot 2: Posterior Means Comparison ---
     plt.figure(figsize=(12, 6))
     plt.plot(theta_standard_mean, 'o-', label="Standard Posterior Mean", color='blue')
     plt.plot(theta_bagged_mean, 's--', label="BayesBag Posterior Mean", color='red')
     plt.xlabel("Street Segment Index")
     plt.ylabel("Estimated Bicycle Proportion (θ)")
-    plt.title("Standard vs BayesBag Posterior Means")
-    plt.axvline(9.5, color='gray', linestyle='--', label='Category Divider')
+    plt.title(f"{label} — Standard vs BayesBag Posterior Means")
+    plt.axvline(9.5, color='gray', linestyle='--')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    plt.savefig(os.path.join(output_dir, f"{base_filename}_means_comparison.png"))
+    plt.close()
 
-    # ---- Plot Posterior Std Devs ----
+    # --- Plot 3: Posterior Std Devs Comparison ---
     plt.figure(figsize=(12, 6))
     plt.plot(theta_standard_std, 'o-', label="Standard Posterior Std", color='blue')
     plt.plot(theta_bagged_std, 's--', label="BayesBag Posterior Std", color='red')
     plt.xlabel("Street Segment Index")
     plt.ylabel("Posterior Std Dev")
-    plt.title("Posterior Spread: Standard vs BayesBag")
-    plt.axvline(9.5, color='gray', linestyle='--', label='Category Divider')
+    plt.title(f"{label} — Posterior Spread Comparison")
+    plt.axvline(9.5, color='gray', linestyle='--')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    plt.savefig(os.path.join(output_dir, f"{base_filename}_stddev_comparison.png"))
+    plt.close()
 
-def main():
-    df = load_bike_data()
-
+def run_pipeline(df, label_prefix="Clean"):
     y_obs = np.array(df["bikes"])
     n_obs = np.array(df["total"])
     block_idx = np.array(df["block_idx"])
-    num_obs = df["block_idx"].nunique()
+    num_blocks = df["block_idx"].nunique()
 
-    # ---- Standard Fit ----
-    trace, model = fit_pymc_model(y_obs, n_obs, block_idx, num_obs, return_model=True)
+    trace, model = fit_pymc_model(y_obs, n_obs, block_idx, num_blocks, return_model=True)
     theta_standard_mean = trace.posterior["theta"].mean(dim=["chain", "draw"]).values
     theta_standard_std = trace.posterior["theta"].std(dim=["chain", "draw"]).values
 
-    # ---- BayesBag ----
-    bagged_theta_samples = bayesbag(y_obs, n_obs, block_idx, num_obs, b=100, mfactor=1)
+    # --- Save trace ---
+    trace_path = os.path.join("out", f"{label_prefix.lower()}_trace.nc")
+    az.to_netcdf(trace, trace_path)
+
+    # --- BayesBag Posterior ---
+    bagged_theta_samples = bayesbag(y_obs, n_obs, block_idx, num_blocks, b=100)
     theta_bagged_mean = bagged_theta_samples.mean(axis=0)
     theta_bagged_std = bagged_theta_samples.std(axis=0)
 
-    plot_bayesbag_results
-
-    # --------------------------
-    # Evaluation / Model Criticism
-    # --------------------------
+    # --- Evaluation ---
     NvN = len(y_obs) * np.sum(theta_standard_std ** 2)
     MvsM = len(y_obs) * np.sum(theta_bagged_std ** 2)
-    mismatch_index = np.nan
-    if MvsM > NvN:
-        mismatch_index = 1 - ((2 * NvN) / MvsM)
-    print(f"\nMISMATCH INDEX = {mismatch_index:.4f}")
+    mismatch_index = 1 - ((2 * NvN) / MvsM) if MvsM > NvN else np.nan
 
     eps = 1e-8
     rse = (theta_bagged_mean - theta_standard_mean) ** 2 / (theta_bagged_std ** 2 + eps)
     rse_mean = np.mean(rse)
+
+    print(f"\n---- {label_prefix} Data ----")
+    print(f"MISMATCH INDEX = {mismatch_index:.4f}")
     print(f"RELATIVE SQUARED ERROR = {rse_mean:.4f}")
 
-if __name__ == "__main__":
-    main()
+    # --- Plotting ---
+    plot_bayesbag_results(
+        bagged_ps=bagged_theta_samples,
+        theta_standard_mean=theta_standard_mean,
+        theta_standard_std=theta_standard_std,
+        theta_bagged_mean=theta_bagged_mean,
+        theta_bagged_std=theta_bagged_std,
+        label=label_prefix,
+        base_filename=label_prefix.lower(),
+        group_labels=None
+    )
+
+def main():
+    clean_df = load_bike_data()
+    run_pipeline(clean_df, label_prefix="Clean")
+
+    contaminated_df = contaminate_data(clean_df, frac=0.1)
+    run_pipeline(contaminated_df, label_prefix="Contaminated")
