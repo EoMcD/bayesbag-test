@@ -200,3 +200,6 @@ def main():
 
     contaminated_df = contaminate_data(clean_df, frac=0.1)
     run_pipeline(contaminated_df, label_prefix="Contaminated")
+
+if __name__ == "__main__":
+    main()
