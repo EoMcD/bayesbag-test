@@ -99,8 +99,8 @@ def evaluate_and_plot(y_obs, n_obs, true_theta, label_prefix="Clean", contam_idx
     # theta_bagged_mean = bagged_samples.mean(axis=0)
     # theta_bagged_std = bagged_samples.std(axis=0)
 
-    theta_bag_mean = np.mean(bagged_samples, axis=0)
-    theta_bag_std = np.std(bagged_samples, axis=0)
+    theta_bagged_mean = np.mean(bagged_samples, axis=0)
+    theta_bagged_std = np.std(bagged_samples, axis=0)
 
     # Metrics
     eps = 1e-8
