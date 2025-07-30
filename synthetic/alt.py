@@ -143,13 +143,15 @@ def evaluate_and_plot(y_obs, n_obs, true_theta, label_prefix="Clean", contam_idx
 
 def main():
     y_clean, n_clean, true_theta = generate_synthetic_data()
-    evaluate_and_plot(y_clean, n_clean, true_theta, label_prefix="Clean")
+    
+    # evaluate_and_plot(y_clean, n_clean, true_theta, label_prefix="Clean")
 
     y_contaminated, n_contaminated, contam_idx = contaminate_synthetic_data(y_clean, n_clean, frac=0.2)
-    evaluate_and_plot(y_contaminated, n_contaminated, true_theta, label_prefix="Contaminated", contam_idx=contam_idx)
+    
+    # evaluate_and_plot(y_contaminated, n_contaminated, true_theta, label_prefix="Contaminated", contam_idx=contam_idx)
 
-    print("\n=== Fitting Normal model to clean data ===")
-    evaluate_and_plot(y_clean, n_clean, true_theta, label_prefix="Clean_Normal", model_type="normal")
+    # print("\n=== Fitting Normal model to clean data ===")
+    # evaluate_and_plot(y_clean, n_clean, true_theta, label_prefix="Clean_Normal", model_type="normal")
 
     print("\n=== Fitting Normal model to contaminated data ===")
     evaluate_and_plot(y_contaminated, n_contaminated, true_theta, label_prefix="Contaminated_Normal", contam_idx=contam_idx, model_type="normal")
