@@ -201,55 +201,52 @@ def compare_group_means(true_means, trace_std, bagged_means, varname='mu', out_p
     plt.close()
 
 # -- MAIN --
+def main_synthetic(contaminate=False):
+    # Generate data
+    df, true_means = generate_gamma_long(num_groups=20, n_per_group=100, shape=2.0, scale=3.0)
 
-def main_synthetic():
-    # generate
-    def main_synthetic(contaminate=False):
-        # Generate data
-        df, true_means = generate_gamma_long(num_groups=20, n_per_group=100, shape=2.0, scale=3.0)
+    if contaminate:
+        df_cont, contam_k = contaminate_multiplicative(df, frac=0.2, factor=0.1)
+    else:
+        df_cont = df.copy()
+
+    # Fit correct model (Gamma) on contaminated data
+    print('\nFitting correct Gamma model (contaminated data)')
+    trace_gamma = fit_gamma_model_long(df_cont, draws=1000, tune=1000)
+
+    # BayesBag for Gamma model
+    print('\nRunning BayesBag for Gamma model')
+    bagged_gamma = bayesbag_long(df_cont, fit_gamma_model_long, extract_group_var='mu', b=20, sample_kwargs={"draws":500, "tune":500})
+
+    # Fit incorrect model (Normal) on contaminated data
+    print('\nFitting incorrect Normal model (contaminated data)')
+    trace_norm = fit_normal_model_long(df_cont, draws=1000, tune=1000)
+
+    # BayesBag for Normal model
+    print('\nRunning BayesBag for Normal model')
+    bagged_norm = bayesbag_long(df_cont, fit_normal_model_long, extract_group_var='mu', b=20, sample_kwargs={"draws":500, "tune":500})
+
+    # Compare (use true_means available for synthetic)
+    compare_group_means(true_means, trace_gamma, bagged_gamma, varname='mu', out_prefix='gamma_correct')
+    compare_group_means(true_means, trace_norm, bagged_norm, varname='mu', out_prefix='normal_incorrect')
     
-        if contaminate:
-            df_cont, contam_k = contaminate_multiplicative(df, frac=0.2, factor=0.1)
-        else:
-            df_cont = df.copy()
-    
-        # Fit correct model (Gamma) on contaminated data
-        print('\nFitting correct Gamma model (contaminated data)')
-        trace_gamma = fit_gamma_model_long(df_cont, draws=1000, tune=1000)
-    
-        # BayesBag for Gamma model
-        print('\nRunning BayesBag for Gamma model')
-        bagged_gamma = bayesbag_long(df_cont, fit_gamma_model_long, extract_group_var='mu', b=20, sample_kwargs={"draws":500, "tune":500})
-    
-        # Fit incorrect model (Normal) on contaminated data
-        print('\nFitting incorrect Normal model (contaminated data)')
-        trace_norm = fit_normal_model_long(df_cont, draws=1000, tune=1000)
-    
-        # BayesBag for Normal model
-        print('\nRunning BayesBag for Normal model')
-        bagged_norm = bayesbag_long(df_cont, fit_normal_model_long, extract_group_var='mu', b=20, sample_kwargs={"draws":500, "tune":500})
-    
-        # Compare (use true_means available for synthetic)
-        compare_group_means(true_means, trace_gamma, bagged_gamma, varname='mu', out_prefix='gamma_correct')
-        compare_group_means(true_means, trace_norm, bagged_norm, varname='mu', out_prefix='normal_incorrect')
-        
-        theta_mean = az.extract(trace_gamma, var_names=['mu']).mean(dim=("chain", "draw")).values
-        theta_std = az.extract(trace_gamma, var_names=['mu']).std(dim=("chain", "draw")).values
-    
-        theta_bagged_mean = bagged_gamma["mu"]["mean"]
-        theta_bagged_std = bagged_gamma["mu"]["std"]
-    
-        y_obs = df_cont['y'].values
-        true_theta = true_means.values
-    
-        evaluate_results(theta_mean, theta_std, theta_bagged_mean, theta_bagged_std,
-                     y_obs, true_theta=true_theta,
-                     label_prefix="Synthetic - Correct Model")
-        # Save traces
-        az.to_netcdf(trace_gamma, "out/trace_gamma.nc")
-        az.to_netcdf(trace_norm, "out/trace_norm.nc")
-    
-        print('Synthetic experiment completed. Plots in figs/, traces in out/.')
+    theta_mean = az.extract(trace_gamma, var_names=['mu']).mean(dim=("chain", "draw")).values
+    theta_std = az.extract(trace_gamma, var_names=['mu']).std(dim=("chain", "draw")).values
+
+    theta_bagged_mean = bagged_gamma["mu"]["mean"]
+    theta_bagged_std = bagged_gamma["mu"]["std"]
+
+    y_obs = df_cont['y'].values
+    true_theta = true_means.values
+
+    evaluate_results(theta_mean, theta_std, theta_bagged_mean, theta_bagged_std,
+                 y_obs, true_theta=true_theta,
+                 label_prefix="Synthetic - Correct Model")
+    # Save traces
+    az.to_netcdf(trace_gamma, "out/trace_gamma.nc")
+    az.to_netcdf(trace_norm, "out/trace_norm.nc")
+
+    print('Synthetic experiment completed. Plots in figs/, traces in out/.')
 
 def main_meager(rdata_path='microcredit-profit-independent.Rdata', stan_like_df=None):
     # If stan_like_df is provided (pre-loaded), use it; otherwise try to read Rdata
