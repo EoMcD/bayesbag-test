@@ -40,11 +40,16 @@ def fit_gamma_model_long(df, draws=4000, tune=2000, chains=4, target_accept=0.95
     y = df['y'].values
 
     with pm.Model() as model:
-        alpha = pm.HalfNormal('alpha', sigma=2.0)
-        mu_k = pm.HalfNormal('mu', sigma=10.0, shape=K)
-        # Observations: use site-specific mu
-        mu_obs = mu_k[site_idx]
-        y_like = pm.Gamma('y_like', alpha=alpha, mu=mu_obs, observed=y)
+        alpha = pm.HalfNormal('alpha', sigma=10)
+        mu_group = pm.Normal('mu_group', mu=0, sigma=10, shape=n_groups)
+
+        # Convert mu_group to positive mean (Gamma mean must be > 0)
+        mu_obs = pm.Deterministic('mu', pm.math.exp(mu_group)[groups])
+
+        # Convert mean+shape to shape+rate
+        beta = alpha / mu_obs
+
+        y_like = pm.Gamma('y_like', alpha=alpha, beta=beta, observed=y)
         trace = pm.sample(draws=draws, tune=tune, chains=chains, target_accept=target_accept, return_inferencedata=True)
 
     return trace
@@ -199,8 +204,14 @@ def compare_group_means(true_means, trace_std, bagged_means, varname='mu', out_p
 
 def main_synthetic():
     # generate
+    def main_synthetic(contaminate=False):
+    # Generate data
     df, true_means = generate_gamma_long(num_groups=20, n_per_group=100, shape=2.0, scale=3.0)
-    df_cont, contam_k = contaminate_multiplicative(df, frac=0.2, factor=0.1)
+
+    if contaminate:
+        df_cont, contam_k = contaminate_multiplicative(df, frac=0.2, factor=0.1)
+    else:
+        df_cont = df.copy()
 
     # Fit correct model (Gamma) on contaminated data
     print('\nFitting correct Gamma model (contaminated data)')
@@ -283,12 +294,21 @@ def main_meager(rdata_path='microcredit-profit-independent.Rdata', stan_like_df=
     print('Meager experiment completed. Traces in out/.')
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['synthetic', 'meager'], default='synthetic')
+if __name__ == "__main__":
+    import argparse, os
+    
+    parser = argparse.ArgumentParser(description="Run BayesBag experiments.")
+    parser.add_argument("--mode", choices=["synthetic", "meager"], required=True,
+                        help="Choose experiment type.")
+    parser.add_argument("--contaminate", action="store_true",
+                        help="If set, contaminate synthetic data.")
     args = parser.parse_args()
 
-    if args.mode == 'synthetic':
-        main_synthetic()
-    else:
+    # Make sure output dirs exist
+    os.makedirs("figs", exist_ok=True)
+    os.makedirs("out", exist_ok=True)
+
+    if args.mode == "synthetic":
+        main_synthetic(contaminate=args.contaminate)
+    elif args.mode == "meager":
         main_meager()
