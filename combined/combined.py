@@ -41,7 +41,7 @@ def fit_gamma_model_long(df, draws=4000, tune=2000, chains=4, target_accept=0.95
 
     with pm.Model() as model:
         alpha = pm.HalfNormal('alpha', sigma=10)
-        mu_group = pm.Normal('mu_group', mu=0, sigma=10, shape=n_groups)
+        mu_group = pm.Normal('mu_group', mu=0, sigma=10, shape=K)
 
         # Convert mu_group to positive mean (Gamma mean must be > 0)
         mu_obs = pm.Deterministic('mu', pm.math.exp(mu_group)[groups])
