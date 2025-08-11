@@ -36,23 +36,37 @@ def contaminate_multiplicative(df, frac=0.1, factor=0.1, seed=42):
 def fit_gamma_model_long(df, draws=4000, tune=2000, chains=4, target_accept=0.95):
     groups = np.sort(df['g'].unique())
     K = len(groups)
-    site_idx = df['g'].values.astype(int)
-    y = df['y'].values
+    # ensure site_idx is an int64 numpy array that maps each observation to 0..K-1
+    site_idx = df['g'].values.astype('int64')
+    y = df['y'].values.astype('float64')
 
     with pm.Model() as model:
-        alpha = pm.HalfNormal('alpha', sigma=10)
-        mu_group = pm.Normal('mu_group', mu=0, sigma=10, shape=K)
+        # global shape parameter (positive)
+        alpha = pm.HalfNormal('alpha', sigma=10.0)
 
-        # Convert mu_group to positive mean (Gamma mean must be > 0)
-        mu_obs = pm.Deterministic('mu', pm.math.exp(mu_group)[groups])
+        # group-level mean in log-space (so exp -> positive mean)
+        mu_group_raw = pm.Normal('mu_group_raw', mu=0.0, sigma=3.0, shape=K)
+        mu_group = pm.Deterministic('mu_group', pm.math.exp(mu_group_raw))  # shape (K,)
 
-        # Convert mean+shape to shape+rate
-        beta = alpha / mu_obs
+        # take the group mean for each observation (length N)
+        mu_obs = pm.Deterministic('mu_obs', pm.math.take(mu_group, site_idx))  # shape (N,)
 
-        y_like = pm.Gamma('y_like', alpha=alpha, beta=beta, observed=y)
-        trace = pm.sample(draws=draws, tune=tune, chains=chains, target_accept=target_accept, return_inferencedata=True)
+        # shape/rate param: beta_n = alpha / mu_n
+        beta_obs = pm.Deterministic('beta_obs', alpha / mu_obs)
+
+        # observed data
+        y_like = pm.Gamma('y_like', alpha=alpha, beta=beta_obs, observed=y)
+
+        trace = pm.sample(
+            draws=draws,
+            tune=tune,
+            chains=chains,
+            target_accept=target_accept,
+            return_inferencedata=True
+        )
 
     return trace
+
 
 # MODEL MISSPECIFICATION
 def fit_normal_model_long(df, draws=4000, tune=2000, chains=4, target_accept=0.95):
