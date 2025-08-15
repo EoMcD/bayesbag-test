@@ -26,14 +26,27 @@ def generate_data_gamma(num_groups=20,n_per_group=100,shape=2,scale=3,seed=42):
     return df,true_means
 
 # -- CONTAMINATE DATA
-def contaminate_data(df,frac=0.1,factor=0.1,seed=42):
+# def contaminate_data(df,frac=0.1,factor=0.1,seed=42):
+#     np.random.seed(seed)
+#     groups=df["g"].unique()
+#     contam_k = np.random.choice(groups,size=int(frac*len(groups)),replace=False)
+#     df_cont = df.copy()
+#     df_cont.loc[df_cont["g"].isin(contam_k),"y"] = df_cont.loc[df_cont["g"].isin(contam_k),"y"]*factor # break this down
+#     # return df_cont, np.array(contam_k)
+#     return df_cont, contam_k
+
+def contaminate_data(df, frac_groups=1, frac_points=0.2, factor=0.1, seed=42):
     np.random.seed(seed)
-    groups=df["g"].unique()
-    contam_k = np.random.choice(groups,size=int(frac*len(groups)),replace=False)
     df_cont = df.copy()
-    df_cont.loc[df_cont["g"].isin(contam_k),"y"] = df_cont.loc[df_cont["g"].isin(contam_k),"y"]*factor # break this down
-    # return df_cont, np.array(contam_k)
-    return df_cont, contam_k
+    groups = df["g"].unique()
+
+    contam_groups = np.random.choice(groups, size=int(frac_groups * len(groups)), replace=False)
+
+    for g in contam_groups:
+        idx = df_cont[df_cont["g"] == g].sample(frac=frac_points, random_state=seed).index
+        df_cont.loc[idx, "y"] *= factor
+
+    return df_cont, contam_groups
 
 # -- MODEL (CORRECT) SPECIFICATION
 def fit_model_gamma(df,draws=4000,tune=2000,chains=4,target_accept=0.95):
@@ -173,11 +186,11 @@ def plot_true_vs_est(true_means, est_mean, est_bagged_mean, title: str, out_path
 # Main runner
 # -------------------------
 
-def main(run: str = "both", contaminate: bool = True, b: int = 20, draws: int = 1000, tune: int = 1000, chains: int = 4, target_accept: float = 0.9):
+def main(run: str = "both", contaminate: bool = True, b: int = 50, draws: int = 4000, tune: int = 2000, chains: int = 4, target_accept: float = 0.95):
     # 1) Generate and (optionally) contaminate data
     df, true_means = generate_data_gamma()
     if contaminate:
-        df_cont, contam_k = contaminate_data(df, frac=0.2, factor=0.1)
+        df_cont, contam_k = contaminate_data(df)
         print(f"Contaminated groups: {sorted(map(int, contam_k))}")
     else:
         df_cont = df
@@ -199,7 +212,8 @@ def main(run: str = "both", contaminate: bool = True, b: int = 20, draws: int = 
             extract_group_var="mu_group",
             b=b,
             mfactor=1.0,
-            sample_kwargs={"draws": max(200, draws // 2), "tune": max(200, tune // 2), "chains": chains, "target_accept": target_accept},
+            # sample_kwargs={"draws": max(200, draws // 2), "tune": max(200, tune // 2), "chains": chains, "target_accept": target_accept}
+            sample_kwargs={"draws": 4000, "tune": 2000, "chains": 4, "target_accept": target_accept},
         )  # (b, K)
 
         mu_mean_gamma, mu_std_gamma = summarize_trace_group(trace_gamma, "mu_group")
@@ -238,7 +252,8 @@ def main(run: str = "both", contaminate: bool = True, b: int = 20, draws: int = 
             extract_group_var="mu",
             b=b,
             mfactor=1.0,
-            sample_kwargs={"draws": max(200, draws // 2), "tune": max(200, tune // 2), "chains": chains, "target_accept": target_accept},
+            # sample_kwargs={"draws": max(200, draws // 2), "tune": max(200, tune // 2), "chains": chains, "target_accept": target_accept}
+            sample_kwargs={"draws": 4000, "tune": 2000, "chains": 4, "target_accept": target_accept},
         )
 
         mu_mean_norm, mu_std_norm = summarize_trace_group(trace_norm, "mu")
