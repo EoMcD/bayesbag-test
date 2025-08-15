@@ -83,46 +83,81 @@ def fit_model_normal(df,draws=4000,tune=2000,chains=4,target_accept=0.95):
         return trace
 
 # -- BAYESBAG PART --
-def bayesbag(df,fit_func,extract_group_var,b=100,mfactor=1,sample_kwargs=None):
-    sample_kwargs=sample_kwargs or {}
-    groups = np.sort(df["g"].unique())
-    K = len(groups)
-    bagged = []
+# def bayesbag(df,fit_func,extract_group_var,b=100,mfactor=1,sample_kwargs=None):
+#     sample_kwargs=sample_kwargs or {}
+#     groups = np.sort(df["g"].unique())
+#     K = len(groups)
+#     bagged = []
 
-    for _ in tqdm(range(b),desc="BayesBag"):
-        boot_groups = np.random.choice(groups,size=max(1,int(mfactor*K)),replace=True)
-        rows=[]
-        for g in boot_groups:
-            grp = df[df["g"]==g]
-            boot_rows = grp.sample(n=len(grp),replace=True)
-            rows.append(boot_rows)
-        boot_df = pd.concat(rows,ignore_index=True)
+#     for _ in tqdm(range(b),desc="BayesBag"):
+#         boot_groups = np.random.choice(groups,size=max(1,int(mfactor*K)),replace=True)
+#         rows=[]
+#         for g in boot_groups:
+#             grp = df[df["g"]==g]
+#             boot_rows = grp.sample(n=len(grp),replace=True)
+#             rows.append(boot_rows)
+#         boot_df = pd.concat(rows,ignore_index=True)
 
-        # unique_boot = np.unique(boot_groups)
-        # mapping = {old: new for new, old in enumerate(unique_boot)}
-        # boot_df["g"] = boot_df["g"].map(mapping).astype(int)
-        boot_df["g"] = boot_df["g"].astype(int)
+#         # unique_boot = np.unique(boot_groups)
+#         # mapping = {old: new for new, old in enumerate(unique_boot)}
+#         # boot_df["g"] = boot_df["g"].map(mapping).astype(int)
+#         boot_df["g"] = boot_df["g"].astype(int)
 
-        trace = fit_func(boot_df,**sample_kwargs)
+#         trace = fit_func(boot_df,**sample_kwargs)
 
-        # find the group var to extract
-        if extract_group_var in trace.posterior:
-            var = trace.posterior[extract_group_var]
-        else:
-            possible = [n for n in trace.posterior.data_vars if n.startswith(extract_group_var)]
-            if not possible:
-                raise KeyError(f"Could not find group var '{extract_group_var}' in trace; have: {list(trace.posterior.data_vars)}")
-            var = trace.posterior[possible[0]]
+#         # find the group var to extract
+#         if extract_group_var in trace.posterior:
+#             var = trace.posterior[extract_group_var]
+#         else:
+#             possible = [n for n in trace.posterior.data_vars if n.startswith(extract_group_var)]
+#             if not possible:
+#                 raise KeyError(f"Could not find group var '{extract_group_var}' in trace; have: {list(trace.posterior.data_vars)}")
+#             var = trace.posterior[possible[0]]
 
-        means = var.mean(dim=("chain", "draw")).values  # (K_boot,)
-        # pad to length K for consistent stacking
-        if means.shape[-1] < K:
-            padded = np.full(K, np.nan)
-            padded[: means.shape[-1]] = means
-            means = padded
-        bagged.append(means)
+#         means = var.mean(dim=("chain", "draw")).values  # (K_boot,)
+#         # pad to length K for consistent stacking
+#         if means.shape[-1] < K:
+#             padded = np.full(K, np.nan)
+#             padded[: means.shape[-1]] = means
+#             means = padded
+#         bagged.append(means)
 
-    return np.array(bagged)  # (b, K)
+#     return np.array(bagged)  # (b, K)
+
+def bayesbag_gamma(df, num_groups, b=50, mfactor=1.0, draws=4000, tune=2000, chains=4, target_accept=0.95):
+    bagged_means = []
+    m = int(mfactor * len(df))
+    for _ in tqdm(range(b), desc="BayesBag iterations"):
+        # Bootstrap rows
+        boot_df = df.sample(n=m, replace=True)
+        # Fit model to bootstrap
+        trace = fit_gamma_model_long(
+            boot_df,
+            draws=draws,
+            tune=tune,
+            chains=chains,
+            target_accept=target_accept
+        )
+        # Extract posterior mean of group means
+        theta_mean = trace.posterior["mu"].mean(dim=["chain", "draw"]).values
+        bagged_means.append(theta_mean)
+    return np.array(bagged_means)
+
+def bayesbag_normal(df, num_groups, b=50, mfactor=1.0, draws=4000, tune=2000, chains=4, target_accept=0.95):
+    bagged_means = []
+    m = int(mfactor * len(df))
+    for _ in tqdm(range(b), desc="BayesBag iterations"):
+        boot_df = df.sample(n=m, replace=True)
+        trace = fit_normal_model_long(
+            boot_df,
+            draws=draws,
+            tune=tune,
+            chains=chains,
+            target_accept=target_accept
+        )
+        theta_mean = trace.posterior["mu"].mean(dim=["chain", "draw"]).values
+        bagged_means.append(theta_mean)
+    return np.array(bagged_means)
 
 def summarize_trace_group(trace: az.InferenceData, varname: str):
     """Return (mean, std) across chains/draws for a group-level var of shape (K,)."""
@@ -182,9 +217,7 @@ def plot_true_vs_est(true_means, est_mean, est_bagged_mean, title: str, out_path
     plt.savefig(out_path, dpi=150)
     plt.close()
 
-# -------------------------
-# Main runner
-# -------------------------
+# -- MAIN --
 
 def main(run: str = "both", contaminate: bool = True, b: int = 50, draws: int = 4000, tune: int = 2000, chains: int = 4, target_accept: float = 0.95):
     # 1) Generate and (optionally) contaminate data
@@ -206,15 +239,16 @@ def main(run: str = "both", contaminate: bool = True, b: int = 50, draws: int = 
 
         # BayesBag for Gamma
         print("Running BayesBag for Gamma model")
-        bag_gamma = bayesbag(
+        bag_gamma = bayesbag_gamma(
             df_cont,
-            fit_model_gamma,
-            extract_group_var="mu_group",
+            num_groups=K,
             b=b,
             mfactor=1.0,
-            # sample_kwargs={"draws": max(200, draws // 2), "tune": max(200, tune // 2), "chains": chains, "target_accept": target_accept}
-            sample_kwargs={"draws": 4000, "tune": 2000, "chains": 4, "target_accept": target_accept},
-        )  # (b, K)
+            draws=draws,
+            tune=tune,
+            chains=chains,
+            target_accept=target_accept
+        )
 
         mu_mean_gamma, mu_std_gamma = summarize_trace_group(trace_gamma, "mu_group")
         mu_bag_mean_gamma = np.nanmean(bag_gamma, axis=0)
@@ -246,14 +280,15 @@ def main(run: str = "both", contaminate: bool = True, b: int = 50, draws: int = 
         az.to_netcdf(trace_norm, os.path.join(output_dir, "trace_normal.nc"))
 
         print("Running BayesBag for Normal model")
-        bag_norm = bayesbag(
+        bag_norm = bayesbag_normal(
             df_cont,
-            fit_model_normal,
-            extract_group_var="mu",
+            num_groups=K,
             b=b,
             mfactor=1.0,
-            # sample_kwargs={"draws": max(200, draws // 2), "tune": max(200, tune // 2), "chains": chains, "target_accept": target_accept}
-            sample_kwargs={"draws": 4000, "tune": 2000, "chains": 4, "target_accept": target_accept},
+            draws=draws,
+            tune=tune,
+            chains=chains,
+            target_accept=target_accept
         )
 
         mu_mean_norm, mu_std_norm = summarize_trace_group(trace_norm, "mu")
@@ -277,6 +312,7 @@ def main(run: str = "both", contaminate: bool = True, b: int = 50, draws: int = 
             title="True vs Estimated (Normal)",
             out_path=os.path.join(figs_dir, "normal_true_vs_est.png"),
         )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
