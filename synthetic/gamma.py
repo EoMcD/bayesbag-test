@@ -85,9 +85,10 @@ def bayesbag(df,fit_func,extract_group_var,b=100,mfactor=1,sample_kwargs=None):
             rows.append(boot_rows)
         boot_df = pd.concat(rows,ignore_index=True)
 
-        unique_boot = np.unique(boot_groups)
-        mapping = {old: new for new, old in enumerate(unique_boot)}
-        boot_df["g"] = boot_df["g"].map(mapping).astype(int)
+        # unique_boot = np.unique(boot_groups)
+        # mapping = {old: new for new, old in enumerate(unique_boot)}
+        # boot_df["g"] = boot_df["g"].map(mapping).astype(int)
+        boot_df["g"] = boot_df["g"].astype(int)
 
         trace = fit_func(boot_df,**sample_kwargs)
 
