@@ -46,8 +46,8 @@ def fit_model_gamma(df,draws=4000,tune=2000,chains=4,target_accept=0.95):
         alpha = pm.HalfNormal("alpha",sigma=10)
 
         mu_group_raw = pm.Normal("mu_group_raw",mu=0,sigma=3,shape=K)
-        mu_group = pm.Deterministic("mu_group",pm.math.exp(mu_group_raw))
-        mu_obs = pm.Deterministic("mu_obs",pm.math.take(mu_group,site_idx))
+        mu_group = pm.Deterministic("mu_group", pm.math.exp(mu_group_raw))
+        mu_obs = pm.Deterministic("mu_obs", mu_group[site_idx])
         
         beta_obs = pm.Deterministic("beta_obs",alpha/mu_obs)
         y_like = pm.Gamma("y_like",alpha=alpha,beta=beta_obs,observed=y)
