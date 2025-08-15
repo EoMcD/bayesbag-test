@@ -131,7 +131,7 @@ def bayesbag_gamma(df, num_groups, b=50, mfactor=1.0, draws=4000, tune=2000, cha
         # Bootstrap rows
         boot_df = df.sample(n=m, replace=True)
         # Fit model to bootstrap
-        trace = fit_gamma_model_long(
+        trace = fit_model_gamma(
             boot_df,
             draws=draws,
             tune=tune,
@@ -148,7 +148,7 @@ def bayesbag_normal(df, num_groups, b=50, mfactor=1.0, draws=4000, tune=2000, ch
     m = int(mfactor * len(df))
     for _ in tqdm(range(b), desc="BayesBag iterations"):
         boot_df = df.sample(n=m, replace=True)
-        trace = fit_normal_model_long(
+        trace = fit_model_normal(
             boot_df,
             draws=draws,
             tune=tune,
