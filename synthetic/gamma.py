@@ -320,7 +320,7 @@ if __name__ == "__main__":
     parser.add_argument("--contaminate", dest="contaminate", action="store_true", help="Apply multiplicative contamination to a fraction of groups")
     parser.add_argument("--no-contaminate", dest="contaminate", action="store_false", help="Do not contaminate the data")
     parser.set_defaults(contaminate=True)
-    parser.add_argument("--b", type=int, default=20, help="Number of BayesBag bootstraps")
+    parser.add_argument("--b", type=int, default=50, help="Number of BayesBag bootstraps")
     parser.add_argument("--draws", type=int, default=1000)
     parser.add_argument("--tune", type=int, default=1000)
     parser.add_argument("--chains", type=int, default=4)
