@@ -26,7 +26,7 @@ def generate_data_gamma(num_groups=20,n_per_group=100,shape=2,scale=3,seed=42):
     return df,true_means
 
 # -- CONTAMINATE DATA
-def contaminate_data(df,frac=0.1,factor=0.1,seed=42)
+def contaminate_data(df,frac=0.1,factor=0.1,seed=42):
     np.random.seed(seed)
     groups=df["g"].unique()
     contam_k = np.random.choice(groups,size=int(frac*len(groups)),replace=False)
