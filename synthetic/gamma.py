@@ -139,7 +139,7 @@ def bayesbag_gamma(df, num_groups, b=50, mfactor=1.0, draws=4000, tune=2000, cha
             target_accept=target_accept
         )
         # Extract posterior mean of group means
-        theta_mean = trace.posterior["mu"].mean(dim=["chain", "draw"]).values
+        theta_mean = trace.posterior["mu_group"].mean(dim=["chain", "draw"]).values
         bagged_means.append(theta_mean)
     return np.array(bagged_means)
 
