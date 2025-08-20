@@ -426,7 +426,7 @@ def main(b=50, draws=4000, tune=2000, chains=4, target_accept=0.95,
          num_groups=20, n_per_group=100, shape=2.0, scale=3.0,
          contam=True, contam_frac_groups=1.0, contam_frac_points=0.2, contam_factor=0.1, seed=42,
          scenarios=("clean", "contam"), models=("gamma", "normal"),
-         alpha_sim=2.0, contam_type="uniform"):
+         alpha_sim=2.0, contam_type=("uniform","groups_mixed","points_mixed","heavy_tail")):
     """
     scenarios: iterable of {"clean","contam"}
     models: iterable of {"gamma","normal"} (requires run_branch to accept models=...)
