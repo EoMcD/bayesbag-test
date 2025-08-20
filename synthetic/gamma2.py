@@ -18,15 +18,15 @@ os.makedirs(OUT_DIR, exist_ok=True)
 # --------------------------
 # Data generation & contamination
 # --------------------------
-def generate_data_gamma(num_groups=20, n_per_group=100, shape=2.0, scale=3.0, seed=42):
+def generate_data_gamma(num_groups=20, n_per_group=100, shape=2.0, scale=3.0, alpha_sim=2.0, seed=42):
     """
     Draw true per-group means mu_k ~ Gamma(shape, scale)  (between-group variability).
-    Then within each group, draw y_ik ~ Gamma(alpha_sim, beta_k) where mean(mu_k)=alpha_sim/beta_k.
+    Then within each group, draw y_ik ~ Gamma(alpha_sim, beta_k) where E[y|g]=mu_k.
+    Smaller alpha_sim => heavier-tailed within-group data (harder for Normal).
     """
     rng = np.random.default_rng(seed)
     true_means = rng.gamma(shape=shape, scale=scale, size=num_groups)
 
-    alpha_sim = 2.0  # fixed positive shape for within-group simulation (can change)
     rows = []
     for k in range(num_groups):
         mu_k = true_means[k]
@@ -37,7 +37,6 @@ def generate_data_gamma(num_groups=20, n_per_group=100, shape=2.0, scale=3.0, se
 
     df = pd.DataFrame(rows)
     return df, true_means
-
 
 def contaminate_data(df, frac_groups=1.0, frac_points=0.2, factor=0.1, seed=42):
     """
@@ -57,6 +56,90 @@ def contaminate_data(df, frac_groups=1.0, frac_points=0.2, factor=0.1, seed=42):
         df_cont.loc[contam_idx, "y"] *= factor
 
     return df_cont, np.array(contam_groups, dtype=int)
+
+def contaminate_groups_mixed(df, frac_groups=0.5, atten_range=(0.05, 0.7),
+                             inflate_range=(1.5, 6.0), p_inflate=0.5, seed=42):
+    """
+    Randomly pick a fraction of groups. For each selected group, either
+    attenuate all its points by a random factor in atten_range (<1) or
+    inflate by a factor in inflate_range (>1).
+    """
+    rng = np.random.default_rng(seed)
+    dfc = df.copy()
+    groups = np.array(sorted(dfc["g"].unique()))
+    m = max(1, int(np.round(frac_groups * len(groups))))
+    chosen = rng.choice(groups, size=m, replace=False)
+
+    for g in chosen:
+        if rng.random() < p_inflate:
+            f = rng.uniform(*inflate_range)   # > 1
+        else:
+            f = rng.uniform(*atten_range)     # < 1
+        dfc.loc[dfc["g"] == g, "y"] *= f
+
+    return dfc, chosen
+
+def contaminate_points_mixed(df, frac_groups=0.5, frac_points_range=(0.05, 0.4),
+                             atten_range=(0.05, 0.7), inflate_range=(1.5, 8.0),
+                             seed=42):
+    """
+    Pick some groups; within each, pick a random fraction of points to corrupt.
+    Split those points into 'down' and 'up' outliers with random magnitudes.
+    """
+    rng = np.random.default_rng(seed)
+    dfc = df.copy()
+    groups = np.array(sorted(dfc["g"].unique()))
+    m = max(1, int(np.round(frac_groups * len(groups))))
+    chosen = rng.choice(groups, size=m, replace=False)
+
+    for g in chosen:
+        grp_idx = dfc.index[dfc["g"] == g].to_numpy()
+        frac = rng.uniform(*frac_points_range)
+        k = max(1, int(np.floor(frac * len(grp_idx))))
+        idx = rng.choice(grp_idx, size=k, replace=False)
+        # split into down vs up
+        k_down = rng.integers(0, k + 1)
+        idx_down = idx[:k_down]
+        idx_up = idx[k_down:]
+        if len(idx_down):
+            dfc.loc[idx_down, "y"] *= rng.uniform(*atten_range, size=len(idx_down))
+        if len(idx_up):
+            dfc.loc[idx_up, "y"] *= rng.uniform(*inflate_range, size=len(idx_up))
+
+    return dfc, chosen
+
+def contaminate_heavy_tail(df, frac_groups=0.5, p_outlier=0.15,
+                           lognorm_sigma=2.0, p_small=0.3, small_min=0.02, small_max=0.3,
+                           seed=42):
+    """
+    In selected groups, each point independently becomes an outlier with prob p_outlier.
+    Outliers are either very large (lognormal multiplier) or very small (strong attenuation).
+    """
+    rng = np.random.default_rng(seed)
+    dfc = df.copy()
+    groups = np.array(sorted(dfc["g"].unique()))
+    m = max(1, int(np.round(frac_groups * len(groups))))
+    chosen = rng.choice(groups, size=m, replace=False)
+
+    for g in chosen:
+        grp_idx = dfc.index[dfc["g"] == g].to_numpy()
+        mask = rng.random(len(grp_idx)) < p_outlier
+        idx = grp_idx[mask]
+        if len(idx) == 0:
+            continue
+        # choose type for each outlier
+        is_small = rng.random(len(idx)) < p_small
+        # big outliers
+        big_idx = idx[~is_small]
+        if len(big_idx):
+            multipliers = np.exp(rng.normal(0.0, lognorm_sigma, size=len(big_idx)))
+            dfc.loc[big_idx, "y"] *= multipliers
+        # small outliers
+        small_idx = idx[is_small]
+        if len(small_idx):
+            dfc.loc[small_idx, "y"] *= rng.uniform(small_min, small_max, size=len(small_idx))
+
+    return dfc, chosen
 
 # --------------------------
 # Models
@@ -342,32 +425,74 @@ def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, mod
 def main(b=50, draws=4000, tune=2000, chains=4, target_accept=0.95,
          num_groups=20, n_per_group=100, shape=2.0, scale=3.0,
          contam=True, contam_frac_groups=1.0, contam_frac_points=0.2, contam_factor=0.1, seed=42,
-         scenarios=("clean", "contam"), models=("gamma", "normal")):
+         scenarios=("clean", "contam"), models=("gamma", "normal"),
+         alpha_sim=2.0, contam_type="uniform"):
+    """
+    scenarios: iterable of {"clean","contam"}
+    models: iterable of {"gamma","normal"} (requires run_branch to accept models=...)
+    contam_type: one of {"uniform","groups_mixed","points_mixed","heavy_tail"}
+    """
 
-    # Generate clean data
+    # 1) Generate CLEAN data (with tunable within-group tail heaviness via alpha_sim)
     df_clean, true_means = generate_data_gamma(
-        num_groups=num_groups, n_per_group=n_per_group, shape=shape, scale=scale, seed=seed
+        num_groups=num_groups,
+        n_per_group=n_per_group,
+        shape=shape,
+        scale=scale,
+        alpha_sim=alpha_sim,
+        seed=seed,
     )
 
-    # Prepare contaminated if needed
+    # 2) Optionally build a CONTAMINATED dataset (only if requested + enabled)
     df_cont = None
-    if contam and ("contam" in scenarios):
-        df_cont, contam_groups = contaminate_data(
-            df_clean, frac_groups=contam_frac_groups, frac_points=contam_frac_points,
-            factor=contam_factor, seed=seed
-        )
-        print(f"Contaminated groups: {sorted(map(int, contam_groups))}")
-    elif "contam" in scenarios:
-        print("[warn] 'contam' requested in --scenarios but contamination disabled via --no_contam; skipping 'contam' scenario.")
+    if "contam" in scenarios:
+        if not contam:
+            print("[warn] 'contam' requested in --scenarios but contamination disabled via --no_contam; skipping 'contam' scenario.")
+        else:
+            if contam_type == "uniform":
+                # your original uniform attenuator (same factor for selected points in each selected group)
+                df_cont, contam_groups = contaminate_data(
+                    df_clean,
+                    frac_groups=contam_frac_groups,
+                    frac_points=contam_frac_points,
+                    factor=contam_factor,
+                    seed=seed,
+                )
+            elif contam_type == "groups_mixed":
+                # whole groups scaled up OR down by random magnitudes
+                df_cont, contam_groups = contaminate_groups_mixed(
+                    df_clean,
+                    frac_groups=contam_frac_groups,
+                    seed=seed,
+                )
+            elif contam_type == "points_mixed":
+                # per-group random subset of points, some attenuated, some inflated
+                df_cont, contam_groups = contaminate_points_mixed(
+                    df_clean,
+                    frac_groups=contam_frac_groups,
+                    seed=seed,
+                )
+            elif contam_type == "heavy_tail":
+                # spiky heavy-tailed outliers within selected groups
+                df_cont, contam_groups = contaminate_heavy_tail(
+                    df_clean,
+                    frac_groups=contam_frac_groups,
+                    seed=seed,
+                )
+            else:
+                raise ValueError(f"Unknown contam_type: {contam_type}")
 
-    # Run requested scenarios/models
+            print(f"Contaminated groups ({contam_type}): {sorted(map(int, contam_groups))}")
+
+    # 3) Run requested scenarios/models
     if "clean" in scenarios:
         run_branch("CLEAN", df_clean, true_means, b, draws, tune, chains, target_accept, models=models)
 
-    if "contam" in scenarios and df_cont is not None:
-        run_branch("CONTAM", df_cont, true_means, b, draws, tune, chains, target_accept, models=models)
-
-
+    if "contam" in scenarios:
+        if df_cont is not None:
+            run_branch("CONTAM", df_cont, true_means, b, draws, tune, chains, target_accept, models=models)
+        else:
+            print("[info] Skipping CONTAM scenario because no contaminated dataset was constructed.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -389,6 +514,10 @@ if __name__ == "__main__":
                     help="Which data scenarios to run")
     parser.add_argument("--models", nargs="+", choices=["gamma", "normal"], default=["gamma", "normal"],
                     help="Which models to run for each scenario")
+    parser.add_argument("--contam_type", choices=["uniform", "groups_mixed", "points_mixed", "heavy_tail"],
+                    default="uniform", help="Contamination mechanism to use when contamination is enabled")
+    parser.add_argument("--alpha_sim", type=float, default=2.0,
+                    help="Within-group Gamma shape used to GENERATE data (smaller => heavier tails)")
     args = parser.parse_args()
 
 main(
@@ -408,4 +537,6 @@ main(
     seed=args.seed,
     scenarios=tuple(args.scenarios),
     models=tuple(args.models),
+    alpha_sim=args.alpha_sim,
+    contam_type=args.contam_type
 )
