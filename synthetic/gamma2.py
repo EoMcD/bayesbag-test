@@ -523,12 +523,7 @@ if __name__ == "__main__":
     parser.add_argument("--contam_type", choices=["uniform", "groups_mixed", "points_mixed", "heavy_tail"],
                     default="uniform", help="Contamination mechanism to use when contamination is enabled")
     parser.add_argument("--alpha_sim", type=float, default=2.0,
-                    help="Within-group Gamma shape used to GENERATE data (smaller => heavier tails)"),
-    args = parser.parse_args()
-
-    if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    # ... your existing add_argument calls ...
+                    help="Within-group Gamma shape used to GENERATE data (smaller => heavier tails)")
     args = parser.parse_args()
 
     main(
