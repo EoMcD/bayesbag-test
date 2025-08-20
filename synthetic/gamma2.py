@@ -282,83 +282,91 @@ def simple_posterior_predictive_rmse_normal(df, trace, var_mu_name="mu", holdout
 # --------------------------
 # Main driver
 # --------------------------
-def run_branch(label, df, true_means, b, draws, tune, chains, target_accept):
+def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, models=("gamma", "normal")):
     """
-    Runs both Gamma (correct) and Normal (mis-specified) on a given dataset df,
-    plus BayesBag for each, then prints/plots evaluations.
+    Runs selected models on df and evaluates/plots.
+    models: iterable with any of {"gamma","normal"}
     """
     K = df["g"].nunique()
 
-    # ----- Gamma (correct) -----
-    print(f"\n=== [{label}] Fitting Gamma (correct) ===")
-    trace_gamma = fit_model_gamma(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
-    az.to_netcdf(trace_gamma, os.path.join(OUT_DIR, f"trace_gamma_{label}.nc"))
+    if "gamma" in models:
+        print(f"\n=== [{label}] Fitting Gamma (correct) ===")
+        trace_gamma = fit_model_gamma(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
+        az.to_netcdf(trace_gamma, os.path.join(OUT_DIR, f"trace_gamma_{label}.nc"))
 
-    std_mean_g, std_low_g, std_high_g, _ = posterior_ci(trace_gamma, "mu_group", alpha=0.05)
+        std_mean_g, std_low_g, std_high_g, _ = posterior_ci(trace_gamma, "mu_group", alpha=0.05)
 
-    print(f"[{label}] BayesBag (Gamma, cluster bootstrap)")
-    bag_gamma = bayesbag_gamma_cluster(df, b=b, mfactor=1.0, draws=draws, tune=tune,
-                                       chains=chains, target_accept=target_accept)
-    bag_sum_gamma = summarize_bagged(bag_gamma)
+        print(f"[{label}] BayesBag (Gamma, cluster bootstrap)")
+        bag_gamma = bayesbag_gamma_cluster(df, b=b, mfactor=1.0, draws=draws, tune=tune,
+                                           chains=chains, target_accept=target_accept)
+        bag_sum_gamma = summarize_bagged(bag_gamma)
 
-    eval_and_plot_groupwise(
-        true_means=true_means[:K],
-        std_mean=std_mean_g,
-        std_low=std_low_g,
-        std_high=std_high_g,
-        bag_summary=bag_sum_gamma,
-        title_prefix=f"{label} - Gamma (correct)"
-    )
+        eval_and_plot_groupwise(
+            true_means=true_means[:K],
+            std_mean=std_mean_g,
+            std_low=std_low_g,
+            std_high=std_high_g,
+            bag_summary=bag_sum_gamma,
+            title_prefix=f"{label} - Gamma (correct)"
+        )
 
-    rmse_g = simple_posterior_predictive_rmse_gamma(df, trace_gamma, holdout_frac=0.2, seed=123)
-    print(f"[{label}] Gamma: simple posterior-predictive mean RMSE (hold-out) = {rmse_g:.4f}")
+        rmse_g = simple_posterior_predictive_rmse_gamma(df, trace_gamma, holdout_frac=0.2, seed=123)
+        print(f"[{label}] Gamma: simple posterior-predictive mean RMSE (hold-out) = {rmse_g:.4f}")
 
-    # ----- Normal (mis-specified) -----
-    print(f"\n=== [{label}] Fitting Normal (mis-specified) ===")
-    trace_norm = fit_model_normal(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
-    az.to_netcdf(trace_norm, os.path.join(OUT_DIR, f"trace_normal_{label}.nc"))
+    if "normal" in models:
+        print(f"\n=== [{label}] Fitting Normal (mis-specified) ===")
+        trace_norm = fit_model_normal(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
+        az.to_netcdf(trace_norm, os.path.join(OUT_DIR, f"trace_normal_{label}.nc"))
 
-    std_mean_n, std_low_n, std_high_n, _ = posterior_ci(trace_norm, "mu", alpha=0.05)
+        std_mean_n, std_low_n, std_high_n, _ = posterior_ci(trace_norm, "mu", alpha=0.05)
 
-    print(f"[{label}] BayesBag (Normal, cluster bootstrap)")
-    bag_norm = bayesbag_normal_cluster(df, b=b, mfactor=1.0, draws=draws, tune=tune,
-                                       chains=chains, target_accept=target_accept)
-    bag_sum_norm = summarize_bagged(bag_norm)
+        print(f"[{label}] BayesBag (Normal, cluster bootstrap)")
+        bag_norm = bayesbag_normal_cluster(df, b=b, mfactor=1.0, draws=draws, tune=tune,
+                                           chains=chains, target_accept=target_accept)
+        bag_sum_norm = summarize_bagged(bag_norm)
 
-    eval_and_plot_groupwise(
-        true_means=true_means[:K],
-        std_mean=std_mean_n,
-        std_low=std_low_n,
-        std_high=std_high_n,
-        bag_summary=bag_sum_norm,
-        title_prefix=f"{label} - Normal (mis-specified)"
-    )
+        eval_and_plot_groupwise(
+            true_means=true_means[:K],
+            std_mean=std_mean_n,
+            std_low=std_low_n,
+            std_high=std_high_n,
+            bag_summary=bag_sum_norm,
+            title_prefix=f"{label} - Normal (mis-specified)"
+        )
 
-    rmse_n = simple_posterior_predictive_rmse_normal(df, trace_norm, holdout_frac=0.2, seed=123)
-    print(f"[{label}] Normal: simple posterior-predictive mean RMSE (hold-out) = {rmse_n:.4f}")
+        rmse_n = simple_posterior_predictive_rmse_normal(df, trace_norm, holdout_frac=0.2, seed=123)
+        print(f"[{label}] Normal: simple posterior-predictive mean RMSE (hold-out) = {rmse_n:.4f}")
 
 
-def main(b=50, draws=1000, tune=1000, chains=4, target_accept=0.9,
-         num_groups=20, n_per_group=100, shape=2.0, scale=3.0, contam=True,
-         contam_frac_groups=1.0, contam_frac_points=0.2, contam_factor=0.1, seed=42):
-    # Generate base (clean) data with true per-group means
+
+def main(b=50, draws=4000, tune=2000, chains=4, target_accept=0.95,
+         num_groups=20, n_per_group=100, shape=2.0, scale=3.0,
+         contam=True, contam_frac_groups=1.0, contam_frac_points=0.2, contam_factor=0.1, seed=42,
+         scenarios=("clean", "contam"), models=("gamma", "normal")):
+
+    # Generate clean data
     df_clean, true_means = generate_data_gamma(
         num_groups=num_groups, n_per_group=n_per_group, shape=shape, scale=scale, seed=seed
     )
 
-    # Optionally create contaminated version
-    if contam:
+    # Prepare contaminated if needed
+    df_cont = None
+    if contam and ("contam" in scenarios):
         df_cont, contam_groups = contaminate_data(
             df_clean, frac_groups=contam_frac_groups, frac_points=contam_frac_points,
             factor=contam_factor, seed=seed
         )
         print(f"Contaminated groups: {sorted(map(int, contam_groups))}")
-    else:
-        df_cont = df_clean.copy()
+    elif "contam" in scenarios:
+        print("[warn] 'contam' requested in --scenarios but contamination disabled via --no_contam; skipping 'contam' scenario.")
 
-    # Run both branches (clean and contaminated)
-    run_branch("CLEAN", df_clean, true_means, b, draws, tune, chains, target_accept)
-    run_branch("CONTAM", df_cont, true_means, b, draws, tune, chains, target_accept)
+    # Run requested scenarios/models
+    if "clean" in scenarios:
+        run_branch("CLEAN", df_clean, true_means, b, draws, tune, chains, target_accept, models=models)
+
+    if "contam" in scenarios and df_cont is not None:
+        run_branch("CONTAM", df_cont, true_means, b, draws, tune, chains, target_accept, models=models)
+
 
 
 if __name__ == "__main__":
@@ -377,21 +385,27 @@ if __name__ == "__main__":
     parser.add_argument("--contam_frac_points", type=float, default=0.2)
     parser.add_argument("--contam_factor", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--scenarios", nargs="+", choices=["clean", "contam"], default=["clean", "contam"],
+                    help="Which data scenarios to run")
+    parser.add_argument("--models", nargs="+", choices=["gamma", "normal"], default=["gamma", "normal"],
+                    help="Which models to run for each scenario")
     args = parser.parse_args()
 
-    main(
-        b=args.b,
-        draws=args.draws,
-        tune=args.tune,
-        chains=args.chains,
-        target_accept=args.target_accept,
-        num_groups=args.num_groups,
-        n_per_group=args.n_per_group,
-        shape=args.shape,
-        scale=args.scale,
-        contam=not args.no_contam,
-        contam_frac_groups=args.contam_frac_groups,
-        contam_frac_points=args.contam_frac_points,
-        contam_factor=args.contam_factor,
-        seed=args.seed,
-    )
+main(
+    b=args.b,
+    draws=args.draws,
+    tune=args.tune,
+    chains=args.chains,
+    target_accept=args.target_accept,
+    num_groups=args.num_groups,
+    n_per_group=args.n_per_group,
+    shape=args.shape,
+    scale=args.scale,
+    contam=not args.no_contam,
+    contam_frac_groups=args.contam_frac_groups,
+    contam_frac_points=args.contam_frac_points,
+    contam_factor=args.contam_factor,
+    seed=args.seed,
+    scenarios=tuple(args.scenarios),
+    models=tuple(args.models),
+)
