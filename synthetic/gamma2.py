@@ -10,10 +10,17 @@ import matplotlib.pyplot as plt
 # --------------------------
 # Paths
 # --------------------------
-FIGS_DIR = "figs_gamma"
-OUT_DIR = "out_gamma"
-os.makedirs(FIGS_DIR, exist_ok=True)
-os.makedirs(OUT_DIR, exist_ok=True)
+def _make_io_dirs(base_figs, base_out, label):
+    """
+    Create figures/output subdirs for a given label (e.g., 'CLEAN', 'CONTAM_points_mixed').
+    Returns (figs_dir, out_dir).
+    """
+    sub = label.lower()
+    figs_dir = os.path.join(FIGS_DIR, sub)
+    out_dir = os.path.join(OUT_DIR, sub)
+    os.makedirs(figs_dir, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
+    return figs_dir, out_dir
 
 # --------------------------
 # Data generation & contamination
@@ -370,12 +377,13 @@ def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, mod
     Runs selected models on df and evaluates/plots.
     models: iterable with any of {"gamma","normal"}
     """
+    figs_dir, out_dir = _make_io_dirs(FIGS_DIR, OUT_DIR, label)
     K = df["g"].nunique()
 
     if "gamma" in models:
         print(f"\n=== [{label}] Fitting Gamma (correct) ===")
         trace_gamma = fit_model_gamma(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
-        az.to_netcdf(trace_gamma, os.path.join(OUT_DIR, f"trace_gamma_{label}.nc"))
+        az.to_netcdf(trace_gamma, os.path.join(out_dir, f"trace_gamma_{label}.nc"))
 
         std_mean_g, std_low_g, std_high_g, _ = posterior_ci(trace_gamma, "mu_group", alpha=0.05)
 
@@ -390,7 +398,8 @@ def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, mod
             std_low=std_low_g,
             std_high=std_high_g,
             bag_summary=bag_sum_gamma,
-            title_prefix=f"{label} - Gamma (correct)"
+            title_prefix=f"{label} - Gamma (correct)",
+            figs_dir=figs_dir,
         )
 
         rmse_g = simple_posterior_predictive_rmse_gamma(df, trace_gamma, holdout_frac=0.2, seed=123)
@@ -399,7 +408,7 @@ def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, mod
     if "normal" in models:
         print(f"\n=== [{label}] Fitting Normal (mis-specified) ===")
         trace_norm = fit_model_normal(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
-        az.to_netcdf(trace_norm, os.path.join(OUT_DIR, f"trace_normal_{label}.nc"))
+        az.to_netcdf(trace_norm, os.path.join(out_dir, f"trace_normal_{label}.nc"))
 
         std_mean_n, std_low_n, std_high_n, _ = posterior_ci(trace_norm, "mu", alpha=0.05)
 
@@ -414,23 +423,22 @@ def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, mod
             std_low=std_low_n,
             std_high=std_high_n,
             bag_summary=bag_sum_norm,
-            title_prefix=f"{label} - Normal (mis-specified)"
+            title_prefix=f"{label} - Normal (mis-specified)",
+            figs_dir=figs_dir,
         )
 
         rmse_n = simple_posterior_predictive_rmse_normal(df, trace_norm, holdout_frac=0.2, seed=123)
         print(f"[{label}] Normal: simple posterior-predictive mean RMSE (hold-out) = {rmse_n:.4f}")
 
-
-
 def main(b=50, draws=4000, tune=2000, chains=4, target_accept=0.95,
          num_groups=20, n_per_group=100, shape=2.0, scale=3.0,
          contam=True, contam_frac_groups=1.0, contam_frac_points=0.2, contam_factor=0.1, seed=42,
          scenarios=("clean", "contam"), models=("gamma", "normal"),
-         alpha_sim=2.0, contam_type=("uniform","groups_mixed","points_mixed","heavy_tail")):
+         alpha_sim=2.0, contam_type="uniform"):
     """
     scenarios: iterable of {"clean","contam"}
-    models: iterable of {"gamma","normal"} (requires run_branch to accept models=...)
-    contam_type: one of {"uniform","groups_mixed","points_mixed","heavy_tail"}
+    models: iterable of {"gamma","normal"}
+    contam_type: {"uniform","groups_mixed","points_mixed","heavy_tail"}
     """
 
     # 1) Generate CLEAN data (with tunable within-group tail heaviness via alpha_sim)
@@ -445,12 +453,12 @@ def main(b=50, draws=4000, tune=2000, chains=4, target_accept=0.95,
 
     # 2) Optionally build a CONTAMINATED dataset (only if requested + enabled)
     df_cont = None
+    contam_label = None
     if "contam" in scenarios:
         if not contam:
             print("[warn] 'contam' requested in --scenarios but contamination disabled via --no_contam; skipping 'contam' scenario.")
         else:
             if contam_type == "uniform":
-                # your original uniform attenuator (same factor for selected points in each selected group)
                 df_cont, contam_groups = contaminate_data(
                     df_clean,
                     frac_groups=contam_frac_groups,
@@ -459,21 +467,18 @@ def main(b=50, draws=4000, tune=2000, chains=4, target_accept=0.95,
                     seed=seed,
                 )
             elif contam_type == "groups_mixed":
-                # whole groups scaled up OR down by random magnitudes
                 df_cont, contam_groups = contaminate_groups_mixed(
                     df_clean,
                     frac_groups=contam_frac_groups,
                     seed=seed,
                 )
             elif contam_type == "points_mixed":
-                # per-group random subset of points, some attenuated, some inflated
                 df_cont, contam_groups = contaminate_points_mixed(
                     df_clean,
                     frac_groups=contam_frac_groups,
                     seed=seed,
                 )
             elif contam_type == "heavy_tail":
-                # spiky heavy-tailed outliers within selected groups
                 df_cont, contam_groups = contaminate_heavy_tail(
                     df_clean,
                     frac_groups=contam_frac_groups,
@@ -482,15 +487,16 @@ def main(b=50, draws=4000, tune=2000, chains=4, target_accept=0.95,
             else:
                 raise ValueError(f"Unknown contam_type: {contam_type}")
 
+            contam_label = f"CONTAM_{contam_type}"
             print(f"Contaminated groups ({contam_type}): {sorted(map(int, contam_groups))}")
 
-    # 3) Run requested scenarios/models
+    # 3) Run requested scenarios/models (each into its own figs/out subdirs)
     if "clean" in scenarios:
         run_branch("CLEAN", df_clean, true_means, b, draws, tune, chains, target_accept, models=models)
 
     if "contam" in scenarios:
         if df_cont is not None:
-            run_branch("CONTAM", df_cont, true_means, b, draws, tune, chains, target_accept, models=models)
+            run_branch(contam_label, df_cont, true_means, b, draws, tune, chains, target_accept, models=models)
         else:
             print("[info] Skipping CONTAM scenario because no contaminated dataset was constructed.")
 
@@ -520,23 +526,28 @@ if __name__ == "__main__":
                     help="Within-group Gamma shape used to GENERATE data (smaller => heavier tails)")
     args = parser.parse_args()
 
-main(
-    b=args.b,
-    draws=args.draws,
-    tune=args.tune,
-    chains=args.chains,
-    target_accept=args.target_accept,
-    num_groups=args.num_groups,
-    n_per_group=args.n_per_group,
-    shape=args.shape,
-    scale=args.scale,
-    contam=not args.no_contam,
-    contam_frac_groups=args.contam_frac_groups,
-    contam_frac_points=args.contam_frac_points,
-    contam_factor=args.contam_factor,
-    seed=args.seed,
-    scenarios=tuple(args.scenarios),
-    models=tuple(args.models),
-    alpha_sim=args.alpha_sim,
-    contam_type=args.contam_type
-)
+    if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    # ... your existing add_argument calls ...
+    args = parser.parse_args()
+
+    main(
+        b=args.b,
+        draws=args.draws,
+        tune=args.tune,
+        chains=args.chains,
+        target_accept=args.target_accept,
+        num_groups=args.num_groups,
+        n_per_group=args.n_per_group,
+        shape=args.shape,
+        scale=args.scale,
+        contam=not args.no_contam,
+        contam_frac_groups=args.contam_frac_groups,
+        contam_frac_points=args.contam_frac_points,
+        contam_factor=args.contam_factor,
+        seed=args.seed,
+        scenarios=tuple(args.scenarios),
+        models=tuple(args.models),
+        alpha_sim=args.alpha_sim,
+        contam_type=args.contam_type,
+    )
