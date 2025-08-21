@@ -249,19 +249,24 @@ def _align_group_vector_to_full(means_boot, unique_boot, old_to_new, groups):
     return aligned
 
 
-def bayesbag_gamma_cluster(df, b=50, mfactor=1.0, draws=2000, tune=1000, chains=4, target_accept=0.9, seed=42):
+def bayesbag_gamma_cluster(df, b=50, mfactor=1.0, draws=2000, tune=1000, chains=4,
+                           target_accept=0.9, seed=42, model="simple"):
+    """
+    Cluster bootstrap + Gamma model. `model` selects simple vs hierarchical fit.
+    """
+    fit_fn = fit_model_gamma_hier if model == "hier" else fit_model_gamma
+
     bagged = []
     rng = np.random.default_rng(seed)
-    for _ in tqdm(range(b), desc="BayesBag (Gamma, cluster)"):
+    for _ in tqdm(range(b), desc=f"BayesBag (Gamma, cluster, {model})"):
         boot_df, unique_boot, old_to_new, groups = _cluster_bootstrap(
             df, mfactor=mfactor, seed=int(rng.integers(0, 2**31 - 1))
         )
-        trace = fit_model_gamma(boot_df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
+        trace = fit_fn(boot_df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
         means_boot = trace.posterior["mu_group"].mean(dim=("chain", "draw")).values
         aligned = _align_group_vector_to_full(means_boot, unique_boot, old_to_new, groups)
         bagged.append(aligned)
     return np.array(bagged)
-
 
 def bayesbag_normal_cluster(df, b=50, mfactor=1.0, draws=2000, tune=1000, chains=4, target_accept=0.9, seed=42):
     bagged = []
@@ -405,21 +410,22 @@ def simple_posterior_predictive_rmse_normal(df, trace, var_mu_name="mu", holdout
 def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, models=("gamma", "normal")):
     """
     Runs selected models on df and evaluates/plots.
-    models: iterable with any of {"gamma","normal"}
+    models: iterable with any of {"gamma","hier","normal"}
     """
     figs_dir, out_dir = _make_io_dirs(FIGS_DIR, OUT_DIR, label)
     K = df["g"].nunique()
 
+    # ----- Gamma (simple) -----
     if "gamma" in models:
-        print(f"\n=== [{label}] Fitting Gamma (correct) ===")
+        print(f"\n=== [{label}] Fitting Gamma (simple) ===")
         trace_gamma = fit_model_gamma(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
-        az.to_netcdf(trace_gamma, os.path.join(out_dir, f"trace_gamma_{label}.nc"))
+        az.to_netcdf(trace_gamma, os.path.join(out_dir, f"trace_gamma_simple_{label}.nc"))
 
         std_mean_g, std_low_g, std_high_g, _ = posterior_ci(trace_gamma, "mu_group", alpha=0.05)
 
-        print(f"[{label}] BayesBag (Gamma, cluster bootstrap)")
+        print(f"[{label}] BayesBag (Gamma, cluster, simple)")
         bag_gamma = bayesbag_gamma_cluster(df, b=b, mfactor=1.0, draws=draws, tune=tune,
-                                           chains=chains, target_accept=target_accept)
+                                           chains=chains, target_accept=target_accept, model="simple")
         bag_sum_gamma = summarize_bagged(bag_gamma)
 
         eval_and_plot_groupwise(
@@ -428,38 +434,40 @@ def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, mod
             std_low=std_low_g,
             std_high=std_high_g,
             bag_summary=bag_sum_gamma,
-            title_prefix=f"{label} - Gamma (correct)",
+            title_prefix=f"{label} - Gamma (simple)",
             figs_dir=figs_dir,
         )
 
         rmse_g = simple_posterior_predictive_rmse_gamma(df, trace_gamma, holdout_frac=0.2, seed=123)
-        print(f"[{label}] Gamma: simple posterior-predictive mean RMSE (hold-out) = {rmse_g:.4f}")
+        print(f"[{label}] Gamma (simple): simple posterior-predictive mean RMSE (hold-out) = {rmse_g:.4f}")
 
+    # ----- Gamma (hierarchical) -----
     if "hier" in models:
-        print(f"\n=== [{label}] Fitting Gamma (correct, hierarchical) ===")
-        trace_gamma = fit_model_gamma_hier(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
-        az.to_netcdf(trace_gamma, os.path.join(out_dir, f"trace_gamma_{label}.nc"))
+        print(f"\n=== [{label}] Fitting Gamma (hierarchical) ===")
+        trace_gamma_h = fit_model_gamma_hier(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
+        az.to_netcdf(trace_gamma_h, os.path.join(out_dir, f"trace_gamma_hier_{label}.nc"))
 
-        std_mean_g, std_low_g, std_high_g, _ = posterior_ci(trace_gamma, "mu_group", alpha=0.05)
+        std_mean_gh, std_low_gh, std_high_gh, _ = posterior_ci(trace_gamma_h, "mu_group", alpha=0.05)
 
-        print(f"[{label}] BayesBag (Gamma, cluster bootstrap)")
-        bag_gamma = bayesbag_gamma_cluster(df, b=b, mfactor=1.0, draws=draws, tune=tune,
-                                           chains=chains, target_accept=target_accept)
-        bag_sum_gamma = summarize_bagged(bag_gamma)
+        print(f"[{label}] BayesBag (Gamma, cluster, hier)")
+        bag_gamma_h = bayesbag_gamma_cluster(df, b=b, mfactor=1.0, draws=draws, tune=tune,
+                                             chains=chains, target_accept=target_accept, model="hier")
+        bag_sum_gamma_h = summarize_bagged(bag_gamma_h)
 
         eval_and_plot_groupwise(
             true_means=true_means[:K],
-            std_mean=std_mean_g,
-            std_low=std_low_g,
-            std_high=std_high_g,
-            bag_summary=bag_sum_gamma,
-            title_prefix=f"{label} - Gamma (correct)",
+            std_mean=std_mean_gh,
+            std_low=std_low_gh,
+            std_high=std_high_gh,
+            bag_summary=bag_sum_gamma_h,
+            title_prefix=f"{label} - Gamma (hier)",
             figs_dir=figs_dir,
         )
 
-        rmse_g = simple_posterior_predictive_rmse_gamma(df, trace_gamma, holdout_frac=0.2, seed=123)
-        print(f"[{label}] Gamma: simple posterior-predictive mean RMSE (hold-out) = {rmse_g:.4f}")
+        rmse_gh = simple_posterior_predictive_rmse_gamma(df, trace_gamma_h, holdout_frac=0.2, seed=123)
+        print(f"[{label}] Gamma (hier): simple posterior-predictive mean RMSE (hold-out) = {rmse_gh:.4f}")
 
+    # ----- Normal (mis-specified) -----
     if "normal" in models:
         print(f"\n=== [{label}] Fitting Normal (mis-specified) ===")
         trace_norm = fit_model_normal(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
@@ -467,7 +475,7 @@ def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, mod
 
         std_mean_n, std_low_n, std_high_n, _ = posterior_ci(trace_norm, "mu", alpha=0.05)
 
-        print(f"[{label}] BayesBag (Normal, cluster bootstrap)")
+        print(f"[{label}] BayesBag (Normal, cluster)")
         bag_norm = bayesbag_normal_cluster(df, b=b, mfactor=1.0, draws=draws, tune=tune,
                                            chains=chains, target_accept=target_accept)
         bag_sum_norm = summarize_bagged(bag_norm)
