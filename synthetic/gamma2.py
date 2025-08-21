@@ -180,15 +180,13 @@ def fit_model_gamma_hier(df, draws=2000, tune=1000, chains=4, target_accept=0.9)
     y = df["y"].values.astype("float64")
 
     with pm.Model() as model:
-        # Hyperpriors learned from the data
-        mu0 = pm.Normal("mu0", 0.0, 5.0)           # mean of log(mu_k)
-        sigma_mu = pm.HalfNormal("sigma_mu", 2.0)  # sd of log(mu_k)
+        # mildly tighter priors to encourage pooling
+        mu0 = pm.Normal("mu0", 0.0, 2.5)            # was 5.0
+        sigma_mu = pm.HalfNormal("sigma_mu", 1.0)   # was 2.0
 
-        # Group-level means
         mu_group_raw = pm.Normal("mu_group_raw", mu=mu0, sigma=sigma_mu, shape=K)
         mu_group = pm.Deterministic("mu_group", pm.math.exp(mu_group_raw))
 
-        # Likelihood: parameterize Gamma by mean via beta = alpha / mu
         alpha = pm.HalfNormal("alpha", 10.0)
         mu_obs = mu_group[site_idx]
         beta_obs = alpha / mu_obs
@@ -197,7 +195,6 @@ def fit_model_gamma_hier(df, draws=2000, tune=1000, chains=4, target_accept=0.9)
         trace = pm.sample(draws=draws, tune=tune, chains=chains,
                           target_accept=target_accept, return_inferencedata=True)
     return trace
-
 
 def fit_model_normal(df, draws=2000, tune=1000, chains=4, target_accept=0.9):
     groups = np.sort(df["g"].unique())
@@ -249,6 +246,7 @@ def _align_group_vector_to_full(means_boot, unique_boot, old_to_new, groups):
     return aligned
 
 
+# REPLACE your bayesbag_gamma_cluster with this:
 def bayesbag_gamma_cluster(df, b=50, mfactor=1.0, draws=2000, tune=1000, chains=4,
                            target_accept=0.9, seed=42, model="simple"):
     """
@@ -292,6 +290,39 @@ def posterior_ci(trace, varname, alpha=0.05):
     std = post.std(dim=("chain", "draw")).values
     return mean, low, high, std
 
+def bayesbag_gamma_posterior_mixture(df, b=30, mfactor=1.0, draws=1500, tune=500, chains=2,
+                                     target_accept=0.9, ndraw_keep=200, seed=42, model="hier"):
+    rng = np.random.default_rng(seed)
+    fit_fn = fit_model_gamma_hier if model == "hier" else fit_model_gamma
+    collected = []
+    for _ in tqdm(range(b), desc=f"BayesBag (Gamma posterior mixture, {model})"):
+        boot_df, unique_boot, old_to_new, groups = _cluster_bootstrap(
+            df, mfactor=mfactor, seed=int(rng.integers(0, 2**31 - 1))
+        )
+        trace = fit_fn(boot_df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
+
+        post = trace.posterior["mu_group"]  # dims: chain, draw, mu_group_dim_0
+        mu_draws = post.stack(s=("chain","draw")).transpose("s","mu_group_dim_0").values
+        S = mu_draws.shape[0]
+        if ndraw_keep < S:
+            keep = rng.choice(S, size=ndraw_keep, replace=False)
+            mu_draws = mu_draws[keep, :]
+
+        K = len(np.sort(df["g"].unique()))
+        aligned = np.full((mu_draws.shape[0], K), np.nan)
+        for old_g in unique_boot:
+            gi = np.where(groups == old_g)[0][0]
+            aligned[:, gi] = mu_draws[:, old_to_new[old_g]]
+        collected.append(aligned)
+
+    return np.vstack(collected)  # (b*ndraw_keep, K)
+
+def summarize_bagged_draws(bag_draws, alpha=0.05):
+    mean = np.nanmean(bag_draws, axis=0)
+    med  = np.nanmedian(bag_draws, axis=0)
+    low  = np.nanpercentile(bag_draws, 100*alpha/2, axis=0)
+    high = np.nanpercentile(bag_draws, 100*(1-alpha/2), axis=0)
+    return {"mean": mean, "median": med, "low": low, "high": high}
 
 def summarize_bagged(bag_matrix):
     med = np.nanmedian(bag_matrix, axis=0)
@@ -466,6 +497,23 @@ def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, mod
 
         rmse_gh = simple_posterior_predictive_rmse_gamma(df, trace_gamma_h, holdout_frac=0.2, seed=123)
         print(f"[{label}] Gamma (hier): simple posterior-predictive mean RMSE (hold-out) = {rmse_gh:.4f}")
+
+        bag_draws_h = bayesbag_gamma_posterior_mixture(df, b=b, mfactor=0.6,  # subsampling helps here
+                                               draws=draws, tune=tune, chains=chains,
+                                               target_accept=target_accept, ndraw_keep=200,
+                                               model="hier")
+        bag_mix_h = summarize_bagged_draws(bag_draws_h, alpha=0.05)
+        
+        eval_and_plot_groupwise(
+            true_means=true_means[:K],
+            std_mean=std_mean_gh,
+            std_low=std_low_gh,
+            std_high=std_high_gh,
+            bag_summary={"median": bag_mix_h["median"], "low": bag_mix_h["low"], "high": bag_mix_h["high"],
+                         "n_eff": np.sum(~np.isnan(bag_draws_h), axis=0)},
+            title_prefix=f"{label} - Gamma (hier, bag posterior mixture)",
+            figs_dir=figs_dir,
+        )
 
     # ----- Normal (mis-specified) -----
     if "normal" in models:
