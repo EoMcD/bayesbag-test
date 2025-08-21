@@ -173,6 +173,31 @@ def fit_model_gamma(df, draws=2000, tune=1000, chains=4, target_accept=0.9):
                           target_accept=target_accept, return_inferencedata=True)
     return trace
 
+def fit_model_gamma_hier(df, draws=2000, tune=1000, chains=4, target_accept=0.9):
+    groups = np.sort(df["g"].unique())
+    K = len(groups)
+    site_idx = df["g"].values.astype("int64")
+    y = df["y"].values.astype("float64")
+
+    with pm.Model() as model:
+        # Hyperpriors learned from the data
+        mu0 = pm.Normal("mu0", 0.0, 5.0)           # mean of log(mu_k)
+        sigma_mu = pm.HalfNormal("sigma_mu", 2.0)  # sd of log(mu_k)
+
+        # Group-level means
+        mu_group_raw = pm.Normal("mu_group_raw", mu=mu0, sigma=sigma_mu, shape=K)
+        mu_group = pm.Deterministic("mu_group", pm.math.exp(mu_group_raw))
+
+        # Likelihood: parameterize Gamma by mean via beta = alpha / mu
+        alpha = pm.HalfNormal("alpha", 10.0)
+        mu_obs = mu_group[site_idx]
+        beta_obs = alpha / mu_obs
+        y_like = pm.Gamma("y_like", alpha=alpha, beta=beta_obs, observed=y)
+
+        trace = pm.sample(draws=draws, tune=tune, chains=chains,
+                          target_accept=target_accept, return_inferencedata=True)
+    return trace
+
 
 def fit_model_normal(df, draws=2000, tune=1000, chains=4, target_accept=0.9):
     groups = np.sort(df["g"].unique())
@@ -410,6 +435,31 @@ def run_branch(label, df, true_means, b, draws, tune, chains, target_accept, mod
         rmse_g = simple_posterior_predictive_rmse_gamma(df, trace_gamma, holdout_frac=0.2, seed=123)
         print(f"[{label}] Gamma: simple posterior-predictive mean RMSE (hold-out) = {rmse_g:.4f}")
 
+    if "hier" in models:
+        print(f"\n=== [{label}] Fitting Gamma (correct, hierarchical) ===")
+        trace_gamma = fit_model_gamma_hier(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
+        az.to_netcdf(trace_gamma, os.path.join(out_dir, f"trace_gamma_{label}.nc"))
+
+        std_mean_g, std_low_g, std_high_g, _ = posterior_ci(trace_gamma, "mu_group", alpha=0.05)
+
+        print(f"[{label}] BayesBag (Gamma, cluster bootstrap)")
+        bag_gamma = bayesbag_gamma_cluster(df, b=b, mfactor=1.0, draws=draws, tune=tune,
+                                           chains=chains, target_accept=target_accept)
+        bag_sum_gamma = summarize_bagged(bag_gamma)
+
+        eval_and_plot_groupwise(
+            true_means=true_means[:K],
+            std_mean=std_mean_g,
+            std_low=std_low_g,
+            std_high=std_high_g,
+            bag_summary=bag_sum_gamma,
+            title_prefix=f"{label} - Gamma (correct)",
+            figs_dir=figs_dir,
+        )
+
+        rmse_g = simple_posterior_predictive_rmse_gamma(df, trace_gamma, holdout_frac=0.2, seed=123)
+        print(f"[{label}] Gamma: simple posterior-predictive mean RMSE (hold-out) = {rmse_g:.4f}")
+
     if "normal" in models:
         print(f"\n=== [{label}] Fitting Normal (mis-specified) ===")
         trace_norm = fit_model_normal(df, draws=draws, tune=tune, chains=chains, target_accept=target_accept)
@@ -523,7 +573,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--scenarios", nargs="+", choices=["clean", "contam"], default=["clean", "contam"],
                     help="Which data scenarios to run")
-    parser.add_argument("--models", nargs="+", choices=["gamma", "normal"], default=["gamma", "normal"],
+    parser.add_argument("--models", nargs="+", choices=["gamma", "normal", "hier"], default=["gamma", "normal", "hier"],
                     help="Which models to run for each scenario")
     parser.add_argument("--contam_type", choices=["uniform", "groups_mixed", "points_mixed", "heavy_tail"],
                     default="uniform", help="Contamination mechanism to use when contamination is enabled")
