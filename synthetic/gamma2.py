@@ -10,16 +10,21 @@ import matplotlib.pyplot as plt
 # --------------------------
 # Paths
 # --------------------------
+FIGS_DIR = "figs_gamma"
+OUT_DIR  = "out_gamma"
+os.makedirs(FIGS_DIR, exist_ok=True)
+os.makedirs(OUT_DIR,  exist_ok=True)
+
 def _make_io_dirs(base_figs, base_out, label):
     """
     Create figures/output subdirs for a given label (e.g., 'CLEAN', 'CONTAM_points_mixed').
     Returns (figs_dir, out_dir).
     """
     sub = label.lower()
-    figs_dir = os.path.join(FIGS_DIR, sub)
-    out_dir = os.path.join(OUT_DIR, sub)
+    figs_dir = os.path.join(base_figs, sub)
+    out_dir  = os.path.join(base_out,  sub)
     os.makedirs(figs_dir, exist_ok=True)
-    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(out_dir,  exist_ok=True)
     return figs_dir, out_dir
 
 # --------------------------
