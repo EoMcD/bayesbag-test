@@ -110,10 +110,17 @@ def bayesbag_gamma(X, B=50, draws=4000, tune=2000, chains=4,
 
 # EVAL
 
-def flatten_draws(trace,var):
-    x = trace.posterior[var]
-    x = x.stack(sample=("chain","draw")).transpose("sample","group").values
-    return x
+def flatten_draws(trace, var):
+    da = trace.posterior[var]            
+    da = da.stack(sample=("chain", "draw"))
+    other = [d for d in da.dims if d != "sample"]
+    if len(other) == 0:
+        return da.values[:, None]
+    if len(other) > 1:
+        da = da.stack(group=other)
+        return da.transpose("sample", "group").values
+    return da.transpose("sample", other[0]).values
+
 
 def param_recovery(trace,true_alpha,true_theta,hdi_prob=0.9):
     alpha_draws = flatten_draws(trace,"alpha")
