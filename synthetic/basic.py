@@ -34,3 +34,10 @@ for g in range(len(a)):
 
 print(f"\nMean abs error of group means: {np.mean(np.abs(sample_mean - theo_mean)):.3f}")
 print(f"Mean abs error of group variances: {np.mean(np.abs(sample_var - theo_var)):.3f}")
+
+# z-scores for group means
+se_mean = np.sqrt(theo_var / X.shape[1])
+z = (sample_mean - theo_mean) / se_mean
+print("Mean z  :", z.mean().round(3))
+print("Std z   :", z.std(ddof=1).round(3))
+print("Max |z| :", np.abs(z).max().round(3))
