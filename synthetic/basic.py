@@ -134,7 +134,6 @@ def flatten_draws(trace, var):
         return da.transpose("sample", "group").values
     return da.transpose("sample", other[0]).values
 
-
 def param_recovery(trace,true_alpha,true_theta,hdi_prob=0.9):
     alpha_draws = flatten_draws(trace,"alpha")
     theta_draws = flatten_draws(trace,"theta")
@@ -203,6 +202,56 @@ def hyper_stability(idata_clean, idata_contam):
     keys = ["mu_log_a","mu_log_theta","sigma_log_a","sigma_log_theta"]
     return {k: abs(get(idata_contam,k) - get(idata_clean,k)) for k in keys}
 
+def evaluate_methods(X_clean, X_contam,
+                     trace_std_clean, trace_bag_clean,
+                     trace_std_contam, trace_bag_contam,
+                     true_alpha, true_theta,
+                     contam_idx, hdi_prob=0.90):
+    
+    # 1) Predictive accuracy (avg log predictive density)
+    lp_std_clean = predictive_density(trace_std_clean, X_clean)
+    lp_std_cont  = predictive_density(trace_std_contam,  X_contam)
+    lp_bag_clean = predictive_density(trace_bag_clean, X_clean)
+    lp_bag_cont  = predictive_density(trace_bag_contam,  X_contam)
+
+    # 2) Parameter recovery on contaminated fits
+    met_std_cont = param_recovery(trace_std_contam, true_alpha, true_theta, hdi_prob=hdi_prob)
+    met_bag_cont = param_recovery(trace_bag_contam, true_alpha, true_theta, hdi_prob=hdi_prob)
+
+    # 3) Stability on unaffected groups
+    clean_idx = ~np.array(contam_idx, dtype=bool)
+    stab_std = stability_delta(trace_std_clean, trace_std_contam, clean_idx, which="theta")
+    stab_bag = stability_delta(trace_bag_clean, trace_bag_contam, clean_idx, which="theta")
+
+    # 4) Coverage/width restricted to contaminated groups
+    cont_mask = np.array(contam_idx, dtype=bool)
+    th_hdi_std = met_std_cont["theta_hdi"][cont_mask]
+    th_hdi_bag = met_bag_cont["theta_hdi"][cont_mask]
+    th_true    = true_theta[cont_mask]
+    cover_std_theta = float(np.mean((th_true >= th_hdi_std[:,0]) & (th_true <= th_hdi_std[:,1])))
+    cover_bag_theta = float(np.mean((th_true >= th_hdi_bag[:,0]) & (th_true <= th_hdi_bag[:,1])))
+
+    # 5) Interval width ratios on contaminated groups (bag/std)
+    width_std = float(np.mean(th_hdi_std[:,1] - th_hdi_std[:,0])) if th_hdi_std.size else np.nan
+    width_bag = float(np.mean(th_hdi_bag[:,1] - th_hdi_bag[:,0])) if th_hdi_bag.size else np.nan
+    width_ratio = width_bag / width_std if np.isfinite(width_std) and width_std>0 else np.nan
+
+    # ---- print summary ----
+    print("\n=== Predictive accuracy (avg log pred density; higher is better) ===")
+    print(f"Standard: clean={lp_std_clean:.4f}, contam={lp_std_cont:.4f}, Δ={lp_std_cont - lp_std_clean:+.4f}")
+    print(f"BayesBag: clean={lp_bag_clean:.4f}, contam={lp_bag_cont:.4f}, Δ={lp_bag_cont - lp_bag_clean:+.4f}")
+
+    print("\n=== Stability on unaffected groups (mean |Δ θ_g|) ===")
+    print(f"Standard: {stab_std:.4f}   BayesBag: {stab_bag:.4f}")
+
+    print("\n=== Contaminated groups: coverage & width (θ) ===")
+    print(f"Cover{int(hdi_prob*100)} θ: std={cover_std_theta:.2f}, bag={cover_bag_theta:.2f}")
+    print(f"HDI width ratio (bag/std): {width_ratio:.2f}")
+
+    print("\n=== Parameter RMSE on contaminated fits (all groups) ===")
+    print(f"RMSE α: std={met_std_cont['alpha_rmse']:.3f}, bag={met_bag_cont['alpha_rmse']:.3f}")
+    print(f"RMSE θ: std={met_std_cont['theta_rmse']:.3f}, bag={met_bag_cont['theta_rmse']:.3f}")
+
 # MAIN
 def main():
     # FITTING
@@ -214,7 +263,7 @@ def main():
     trace_bag_clean = trace_bb_clean["trace"]
 
     # CONTAMINATION
-    Xc = contaminate_scale_inflate(X,a,theta,groups=(1,8),eps=0.1,scale_mult=0.6,seed=42)
+    Xc = contaminate_scale_inflate(X,a,theta,groups=(1,8),eps=0.1,scale_mult=0.1,seed=42)
 
     trace_std_contam = fit_gamma(Xc,draws=1000,tune=500,chains=4)
     trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=1000,tune=500,chains=4)
@@ -235,30 +284,11 @@ def main():
     # print(f"HDI width θ (bag/std): {m_bag['theta_hdi_width']/m_std['theta_hdi_width']:.2f}")
 
     # EVALUATION, CLEAN AND CONTAM
-    # Predictive accuracy (higher is better)
-    lp_std_clean = predictive_density(trace_std_clean, X)
-    lp_std_contam  = predictive_density(trace_std_contam,  Xc)
-    lp_bag_clean = predictive_density(trace_bag_clean, X)
-    lp_bag_contam  = predictive_density(trace_bag_contam,  Xc)
-
-    print(f"Δ LPD std (cont-clean): {lp_std_contam - lp_std_clean:+.4f}")
-    print(f"Δ LPD bag (cont-clean): {lp_bag_contam - lp_bag_clean:+.4f}")
-
-    # Stability on unaffected groups (everything except 1 and 8)
-    clean_idx = np.ones(X.shape[0], dtype=bool); clean_idx[[1,8]] = False
-    s_std = stability_delta(trace_std_clean, trace_std_contam, clean_idx, which="theta")
-    s_bag = stability_delta(trace_bag_clean, trace_bag_contam, clean_idx, which="theta")
-    print(f"Stability (θ, clean groups): std={s_std:.3f}, bag={s_bag:.3f}")
-
-    # Coverage/width on contaminated groups
-    m_std_cont = param_recovery(trace_std_contam, a, theta, hdi_prob=0.90)
-    m_bag_cont = param_recovery(trace_bag_contam, a, theta, hdi_prob=0.90)
-    cont_idx = np.array([False, True, False, False, False, False, False, False, True, False])
-    cover_std_theta_cont = np.mean((theta[cont_idx] >= m_std_cont["theta_hdi"][cont_idx,0]) &
-                                (theta[cont_idx] <= m_std_cont["theta_hdi"][cont_idx,1]))
-    cover_bag_theta_cont = np.mean((theta[cont_idx] >= m_bag_cont["theta_hdi"][cont_idx,0]) &
-                                (theta[cont_idx] <= m_bag_cont["theta_hdi"][cont_idx,1]))
-    print(f"Contaminated θ coverage (90%): std={cover_std_theta_cont:.2f}, bag={cover_bag_theta_cont:.2f}")
+    contam_groups = [False, True, False, False, False, False, False, False, True, False]
+    evaluate_methods(X, Xc,
+                 trace_std_clean, trace_bag_clean,
+                 trace_std_contam, trace_bag_contam,
+                 a, theta, contam_groups, hdi_prob=0.90)
 
 if __name__ == "__main__":
     main()
