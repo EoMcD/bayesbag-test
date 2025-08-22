@@ -263,7 +263,7 @@ def main():
     trace_bag_clean = trace_bb_clean["trace"]
 
     # CONTAMINATION
-    Xc = contaminate_scale_inflate(X,a,theta,groups=(1,8),eps=0.1,scale_mult=0.1,seed=42)
+    Xc = contaminate_scale_inflate(X,a,theta,groups=(1,8),eps=0.1,scale_mult=6,seed=42)
 
     trace_std_contam = fit_gamma(Xc,draws=1000,tune=500,chains=4)
     trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=1000,tune=500,chains=4)
