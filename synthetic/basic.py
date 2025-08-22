@@ -16,7 +16,7 @@ def data_generation(groups,per_group,seed):
     # synthetic data for each group
     data = []
     for g in range(groups):
-        data[g] = gamma.rvs(a=alphas[g], scale=thetas[g], size=per_group, random_state=rng)
+        data.append(gamma.rvs(a=alphas[g], scale=thetas[g], size=per_group, random_state=rng))
 
     return data,alphas,thetas
 
