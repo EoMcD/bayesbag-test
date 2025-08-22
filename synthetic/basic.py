@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gamma,norm
+from scipy.special import logsumexp
 import pymc as pm
 import arviz as az
 from tqdm.auto import tqdm
@@ -107,13 +108,82 @@ def bayesbag_gamma(X, B=50, draws=4000, tune=2000, chains=4,
     summary = eval_gamma(trace_bagged, hdi=hdi)
     return {"trace": trace_bagged, "summary": summary}
 
+# EVAL
+
+def flatten_draws(trace,var):
+    x = trace.posterior[var]
+    x = x.stack(sample=("chain","draw")).transpose("sample","group").values
+    return x
+
+def param_recovery(trace,true_alpha,true_theta,hdi_prob=0.9):
+    alpha_draws = flatten_draws(trace,"alpha")
+    theta_draws = flatten_draws(trace,"theta")
+    alpha_mean = alpha_draws.mean(axis=0)
+    theta_mean = theta_draws.mean(axis=0)
+
+    alpha_hdi = az.hdi(alpha_draws,hdi_prob=hdi_prob)
+    theta_hdi = az.hdi(theta_draws,hdi_prob=hdi_prob)
+
+    alpha_cover = np.mean((true_alpha >= alpha_hdi[:,0]) & (true_alpha <= alpha_hdi[:,1]))
+    theta_cover = np.mean((true_theta >= theta_hdi[:,0]) & (true_theta <= theta_hdi[:,1]))
+    alpha_width = np.mean(alpha_hdi[:,1] - alpha_hdi[:,0])
+    theta_width = np.mean(theta_hdi[:,1] - theta_hdi[:,0])
+
+    alpha_rmse = np.sqrt(np.mean((alpha_mean - true_alpha)**2))
+    theta_rmse = np.sqrt(np.mean((theta_mean - true_theta)**2))
+
+    return {
+        "alpha_rmse":alpha_rmse,
+        "theta_rmse":theta_rmse,
+        "alpha_cover":alpha_cover,
+        "theta_cover":theta_cover,
+        "alpha_hdi_width":alpha_width,
+        "theta_hdi_width":theta_width,
+        "alpha_mean":alpha_mean,
+        "theta_mean":theta_mean,
+        "alpha_hdi":alpha_hdi,
+        "theta_hdi":theta_hdi,
+    }
+
+def predictive_density(trace,X,samples=2000,rng=None):
+    alpha = flatten_draws(trace,"alpha")
+    theta = flatten_draws(trace,"theta")
+    S,G=alpha.shape
+    if samples and S > samples:
+        rng = np.random.default_rng(None if rng is None else rng)
+        idx = rng.choice(S,samples,replace=False)
+        alpha,theta = alpha[idx],theta[idx]
+        S=samples
+    total = 0
+    for g in range(G):
+        y = X[g]
+        logp = gamma.logpdf(y[:,None],alpha=alpha[:,g],scale=theta[:,g])
+        total += (logsumexp(logp,axis=1)-np.log(S)).sum()
+    return total / X.size
+
 # MAIN
 def main():
-    trace_std = fit_gamma(X,draws=2000,tune=1000,chains=4)
+    # FITTING
+    trace_std = fit_gamma(X,draws=1000,tune=500,chains=4)
     print(eval_gamma(trace_std))
 
-    trace_bb = bayesbag_gamma(X,B=50,draws=2000,tune=1000,chains=4)
+    trace_bb = bayesbag_gamma(X,B=50,draws=1000,tune=500,chains=4)
     print(trace_bb["summary"])
+    trace_bag = trace_bb["trace"]
+
+    # EVALUATION
+    lp_std = predictive_density(trace_std,X)
+    lp_bag = predictive_density(trace_bag,X)
+    print(f"Avg log pred density – std: {lp_std:.4f}, bagged: {lp_bag:.4f}, Δ={lp_bag - lp_std:.4f}")
+
+    m_std = param_recovery(trace_std,a,theta,hdi_prob=0.9)
+    m_bag = param_recovery(trace_bag,a,theta,hdi_prob=0.9)
+    print(f"RMSE α: std={m_std['alpha_rmse']:.3f}, bag={m_bag['alpha_rmse']:.3f}")
+    print(f"RMSE θ: std={m_std['theta_rmse']:.3f}, bag={m_bag['theta_rmse']:.3f}")
+    print(f"Cover90 α: std={m_std['alpha_cover']:.2f}, bag={m_bag['alpha_cover']:.2f}")
+    print(f"Cover90 θ: std={m_std['theta_cover']:.2f}, bag={m_bag['theta_cover']:.2f}")
+    print(f"HDI width α (bag/std): {m_bag['alpha_hdi_width']/m_std['alpha_hdi_width']:.2f}")
+    print(f"HDI width θ (bag/std): {m_bag['theta_hdi_width']/m_std['theta_hdi_width']:.2f}")
 
 if __name__ == "__main__":
     main()
