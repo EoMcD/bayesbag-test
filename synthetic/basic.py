@@ -164,7 +164,7 @@ def predictive_density(trace,X,samples=2000,rng=None):
     total = 0
     for g in range(G):
         y = X[g]
-        logp = gamma.logpdf(y[:,None],alpha=alpha[:,g],scale=theta[:,g])
+        logp = gamma.logpdf(y[:,None],a=alpha[:,g],scale=theta[:,g])
         total += (logsumexp(logp,axis=1)-np.log(S)).sum()
     return total / X.size
 
