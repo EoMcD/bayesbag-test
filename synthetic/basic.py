@@ -14,11 +14,10 @@ def data_generation(groups,per_group,seed):
     thetas = np.exp(norm.rvs(loc=np.log(theta),scale=theta_sd,size=groups,random_state=rng))
 
     # synthetic data for each group
-    data = []
+    data = np.empty((groups, per_group), dtype=float)
     for g in range(groups):
-        data.append(gamma.rvs(a=alphas[g], scale=thetas[g], size=per_group, random_state=rng))
-
-    return data,alphas,thetas
+        data[g, :] = gamma.rvs(a=alphas[g],scale=thetas[g],size=per_group,random_state=rng)
+    return data, alphas, thetas
 
 X,a,theta = data_generation(10,100,42)
 
