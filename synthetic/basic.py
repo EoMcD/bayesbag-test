@@ -103,7 +103,7 @@ def bayesbag_gamma(X, B=50, draws=4000, tune=2000, chains=4,
             except Exception:
                 pass
 
-    trace_bagged = az.concat(bagged, dim="chain")
+    trace_bagged = az.concat(bagged, dim="draw")
     summary = eval_gamma(trace_bagged, hdi=hdi)
     return {"trace": trace_bagged, "summary": summary}
 
