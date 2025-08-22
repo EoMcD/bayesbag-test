@@ -75,7 +75,7 @@ def eval_gamma(trace,hdi=0.9):
 
 def bayesbag_gamma(X, B=50, draws=4000, tune=2000, chains=4,
                    prior_a=3, prior_theta=2, prior_sd=0.5, hdi=0.9,
-                   show_progress=True, show_health=True):
+                   show_progress=True, mfactor=1, show_health=True):
     rng = np.random.default_rng(42)
     X = np.asarray(X)
     groups, per_group = X.shape
@@ -88,7 +88,10 @@ def bayesbag_gamma(X, B=50, draws=4000, tune=2000, chains=4,
     for b in iterator:
         Xb = np.empty_like(X)
         for g in range(groups):
-            idx = rng.integers(0, per_group, size=per_group)
+            m=mfactor*per_group
+            idx = rng.integers(0, per_group, size=m)
+            # pad = rng.integers(0, m, size=per_group - m)
+            # Xb[g] = np.concatenate([X[g, idx], X[g, idx][pad]])
             Xb[g] = X[g, idx]
 
         trace_b = fit_gamma(
@@ -107,6 +110,16 @@ def bayesbag_gamma(X, B=50, draws=4000, tune=2000, chains=4,
     trace_bagged = az.concat(bagged, dim="draw")
     summary = eval_gamma(trace_bagged, hdi=hdi)
     return {"trace": trace_bagged, "summary": summary}
+
+# CONTAM
+def contaminate_scale_inflate(X,a,theta,groups=(0,),eps=0.1,scale_mult=5,seed=0):
+    rng = np.random.default_rng(seed)
+    Xc = X.copy()
+    G,n = X.shape
+    for g in groups:
+        m = rng.random(n) < eps
+        Xc[g,m] = gamma.rvs(a=a[g],scale=theta[g]*scale_mult,size=m.sum(),random_state=rng)
+    return Xc
 
 # EVAL
 
@@ -168,29 +181,84 @@ def predictive_density(trace,X,samples=2000,rng=None):
         total += (logsumexp(logp,axis=1)-np.log(S)).sum()
     return total / X.size
 
+def posterior_means(trace):
+    alpha = flatten_draws(trace,"alpha").mean(axis=0)
+    theta = flatten_draws(trace,"theta").mean(axis=0)
+    return alpha,theta
+
+def stability_delta(trace_clean,trace_contam,clean_idx,which="theta"):
+    alpha_clean,theta_clean = posterior_means(trace_clean)
+    alpha_contam,theta_contam = posterior_means(trace_contam)
+    if which == "theta":
+        return float(np.mean(np.abs(theta_contam[clean_idx]-theta_clean[clean_idx])))
+    elif which == "alpha":
+        return float(np.mean(np.abs(alpha_contam[clean_idx]-alpha_clean[clean_idx])))
+    else:
+        raise ValueError("hich must be 'theta' or 'alpha")
+    
+def hyper_stability(idata_clean, idata_contam):
+    def get(idata, name):
+        x = idata.posterior[name].stack(sample=("chain","draw")).values
+        return float(x.mean())
+    keys = ["mu_log_a","mu_log_theta","sigma_log_a","sigma_log_theta"]
+    return {k: abs(get(idata_contam,k) - get(idata_clean,k)) for k in keys}
+
 # MAIN
 def main():
     # FITTING
-    trace_std = fit_gamma(X,draws=1000,tune=500,chains=4)
-    print(eval_gamma(trace_std))
+    trace_std_clean = fit_gamma(X,draws=1000,tune=500,chains=4)
+    # print(eval_gamma(trace_std_clean))
 
-    trace_bb = bayesbag_gamma(X,B=50,draws=1000,tune=500,chains=4)
-    print(trace_bb["summary"])
-    trace_bag = trace_bb["trace"]
+    trace_bb_clean = bayesbag_gamma(X,B=50,draws=1000,tune=500,chains=4)
+    # print(trace_bb_clean["summary"])
+    trace_bag_clean = trace_bb_clean["trace"]
 
-    # EVALUATION
-    lp_std = predictive_density(trace_std,X)
-    lp_bag = predictive_density(trace_bag,X)
-    print(f"Avg log pred density – std: {lp_std:.4f}, bagged: {lp_bag:.4f}, Δ={lp_bag - lp_std:.4f}")
+    # CONTAMINATION
+    Xc = contaminate_scale_inflate(X,a,theta,groups=(1,8),eps=0.1,scale_mult=0.6,seed=42)
 
-    m_std = param_recovery(trace_std,a,theta,hdi_prob=0.9)
-    m_bag = param_recovery(trace_bag,a,theta,hdi_prob=0.9)
-    print(f"RMSE α: std={m_std['alpha_rmse']:.3f}, bag={m_bag['alpha_rmse']:.3f}")
-    print(f"RMSE θ: std={m_std['theta_rmse']:.3f}, bag={m_bag['theta_rmse']:.3f}")
-    print(f"Cover90 α: std={m_std['alpha_cover']:.2f}, bag={m_bag['alpha_cover']:.2f}")
-    print(f"Cover90 θ: std={m_std['theta_cover']:.2f}, bag={m_bag['theta_cover']:.2f}")
-    print(f"HDI width α (bag/std): {m_bag['alpha_hdi_width']/m_std['alpha_hdi_width']:.2f}")
-    print(f"HDI width θ (bag/std): {m_bag['theta_hdi_width']/m_std['theta_hdi_width']:.2f}")
+    trace_std_contam = fit_gamma(Xc,draws=1000,tune=500,chains=4)
+    trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=1000,tune=500,chains=4)
+    trace_bag_contam = trace_bb_contam["trace"]
+
+    # EVALUATION, PURELY CLEAN
+    # lp_std = predictive_density(trace_std,X)
+    # lp_bag = predictive_density(trace_bag,X)
+    # print(f"Avg log pred density – std: {lp_std:.4f}, bagged: {lp_bag:.4f}, Δ={lp_bag - lp_std:.4f}")
+
+    # m_std = param_recovery(trace_std,a,theta,hdi_prob=0.9)
+    # m_bag = param_recovery(trace_bag,a,theta,hdi_prob=0.9)
+    # print(f"RMSE α: std={m_std['alpha_rmse']:.3f}, bag={m_bag['alpha_rmse']:.3f}")
+    # print(f"RMSE θ: std={m_std['theta_rmse']:.3f}, bag={m_bag['theta_rmse']:.3f}")
+    # print(f"Cover90 α: std={m_std['alpha_cover']:.2f}, bag={m_bag['alpha_cover']:.2f}")
+    # print(f"Cover90 θ: std={m_std['theta_cover']:.2f}, bag={m_bag['theta_cover']:.2f}")
+    # print(f"HDI width α (bag/std): {m_bag['alpha_hdi_width']/m_std['alpha_hdi_width']:.2f}")
+    # print(f"HDI width θ (bag/std): {m_bag['theta_hdi_width']/m_std['theta_hdi_width']:.2f}")
+
+    # EVALUATION, CLEAN AND CONTAM
+    # Predictive accuracy (higher is better)
+    lp_std_clean = predictive_density(trace_std_clean, X)
+    lp_std_contam  = predictive_density(trace_std_contam,  Xc)
+    lp_bag_clean = predictive_density(trace_bag_clean, X)
+    lp_bag_contam  = predictive_density(trace_bag_contam,  Xc)
+
+    print(f"Δ LPD std (cont-clean): {lp_std_contam - lp_std_clean:+.4f}")
+    print(f"Δ LPD bag (cont-clean): {lp_bag_contam - lp_bag_clean:+.4f}")
+
+    # Stability on unaffected groups (everything except 1 and 8)
+    clean_idx = np.ones(X.shape[0], dtype=bool); clean_idx[[1,8]] = False
+    s_std = stability_delta(trace_std_clean, trace_std_contam, clean_idx, which="theta")
+    s_bag = stability_delta(trace_bag_clean, trace_bag_contam, clean_idx, which="theta")
+    print(f"Stability (θ, clean groups): std={s_std:.3f}, bag={s_bag:.3f}")
+
+    # Coverage/width on contaminated groups
+    m_std_cont = param_recovery(trace_std_contam, a, theta, hdi_prob=0.90)
+    m_bag_cont = param_recovery(trace_bag_contam, a, theta, hdi_prob=0.90)
+    cont_idx = np.array([False, True, False, False, False, False, False, False, True, False])
+    cover_std_theta_cont = np.mean((theta[cont_idx] >= m_std_cont["theta_hdi"][cont_idx,0]) &
+                                (theta[cont_idx] <= m_std_cont["theta_hdi"][cont_idx,1]))
+    cover_bag_theta_cont = np.mean((theta[cont_idx] >= m_bag_cont["theta_hdi"][cont_idx,0]) &
+                                (theta[cont_idx] <= m_bag_cont["theta_hdi"][cont_idx,1]))
+    print(f"Contaminated θ coverage (90%): std={cover_std_theta_cont:.2f}, bag={cover_bag_theta_cont:.2f}")
 
 if __name__ == "__main__":
     main()
