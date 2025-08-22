@@ -46,7 +46,7 @@ X,a,theta = data_generation(10,100,42)
 # print("Max |z| :", np.abs(z).max().round(3))
 
 # BAYESIAN INFERENCE
-def fit_gamma(X,draws=4000,tune=2000,chains=4,prior_a=3,prior_theta=2,prior_sd=0.5):
+def fit_gamma(X,draws=4000,tune=2000,chains=4,prior_a=3,prior_theta=2,prior_sd=0.5,seed=42):
     X = np.asarray(X)
     groups = X.shape[0]
 
@@ -64,7 +64,7 @@ def fit_gamma(X,draws=4000,tune=2000,chains=4,prior_a=3,prior_theta=2,prior_sd=0
         for g in range(groups):
             pm.Gamma(f"y_{g}",alpha=alpha[g],beta=1/theta[g],observed=X[g])
         
-        trace = pm.sample(draws=draws,tune=tune,chains=chains,random_seed=42,target_accept=0.95,progressbar=True,return_inferencedata=True)
+        trace = pm.sample(draws=draws,tune=tune,chains=chains,random_seed=seed,target_accept=0.95,return_inferencedata=True)
     return trace
 
 def eval_gamma(trace,hdi=0.9):
@@ -92,7 +92,7 @@ def bayesbag_gamma(X, B=50, draws=4000, tune=2000, chains=4,
 
         trace_b = fit_gamma(
             Xb, draws=draws, tune=tune, chains=chains,
-            prior_a=prior_a, prior_theta=prior_theta, prior_sd=prior_sd, progressbar=False
+            prior_a=prior_a, prior_theta=prior_theta, prior_sd=prior_sd, seed=rng.integers(1_000_000_000)
         )
         bagged.append(trace_b)
 
