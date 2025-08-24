@@ -337,6 +337,11 @@ def evaluate_methods(
     for g in np.where(contam_idx)[0]:
         print(f"g={g}: rank_std={rS[g]:.3f}, rank_bag={rB[g]:.3f}")
 
+    # Mismatch index (θ) on clean fit
+    mi_clean = mismatch_index_theta(trace_std_clean, trace_bag_clean, X_clean)
+    print(f"\n=== [Gamma] Mismatch index (θ, clean fit) ===")
+    print(f"Mismatch index: {mi_clean:.4f}" if np.isfinite(mi_clean) else "Mismatch index: nan")
+    
     # Mismatch index (θ) on contaminated fit
     mi = mismatch_index_theta(trace_std_cont, trace_bag_cont, X_contam)
     print(f"\n=== [Gamma] Mismatch index (θ, contaminated fit) ===")
