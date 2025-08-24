@@ -120,11 +120,11 @@ print("Models made")
 # --- BAYESBAG PART, WIP ---
 from sklearn.utils import resample
 
-n_boot = 20
+B = 50
 boot_fits, boot_data = [], []
 
-for i in range(n_boot):
-    print(f"Running bootstrap {i+1} of {n_boot}")
+for i in range(B):
+    print(f"Running bootstrap {i+1} of {B}")
     # stratify by (site, treatment)
     boot_i = (
         data.groupby(["g", "t"], group_keys=False)
