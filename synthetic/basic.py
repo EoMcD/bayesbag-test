@@ -195,7 +195,7 @@ def bayesbag_normal(
 
 
 # CONTAM
-def contaminate_scale_inflate(X,a,theta,groups=(0,),eps=0.15,scale_mult=5,seed=0):
+def contaminate_scale_inflate(X,a,theta,groups=(0,),eps=0.1,scale_mult=5,seed=0):
     rng = np.random.default_rng(seed)
     Xc = X.copy()
     G,n = X.shape
@@ -348,7 +348,7 @@ def main():
     trace_bag_clean = trace_bb_clean["trace"]
 
     # CONTAMINATION
-    Xc = contaminate_scale_inflate(X,a,theta,groups=(1,8),eps=0.1,scale_mult=6,seed=42)
+    Xc = contaminate_scale_inflate(X,a,theta,groups=(1,8),eps=0.15,scale_mult=6,seed=42)
 
     trace_std_contam = fit_gamma(Xc,draws=2000,tune=1000,chains=4)
     trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=2000,tune=1000,chains=4)
