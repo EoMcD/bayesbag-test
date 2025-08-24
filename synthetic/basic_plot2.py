@@ -1,315 +1,301 @@
-# plots_combo_from_bundle.py
 import os
-import glob
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Tuple
 
 from basic_eval import (
-    load_bundle, flatten_draws, posterior_rank, hdi_min_width
+    load_bundle,
+    flatten_draws,
+    posterior_rank,
 )
 
-# -----------------------
-# Utilities
-# -----------------------
+# --- local helpers (kept here so this file is self-contained) ---
 
-def _find_bundle_dir(path: str) -> str:
-    """
-    Convenience: allow passing the parent 'runs' dir. If 'path' itself
-    contains a bundle (has data_arrays.npz), use it; else search its
-    immediate subdirs for one containing data_arrays.npz and pick the
-    most recently modified.
-    """
-    wanted = os.path.join(path, "data_arrays.npz")
-    if os.path.exists(wanted):
-        return path
+def hdi_min_width(draws_2d, prob=0.90):
+    """Minimum-width HDI per column; draws_2d shape (S, G). Returns (G,2)."""
+    S, G = draws_2d.shape
+    k = max(1, int(np.ceil(prob * S)))
+    out = np.empty((G, 2), dtype=float)
+    for g in range(G):
+        s = np.sort(draws_2d[:, g])
+        if k >= S:
+            out[g] = [s[0], s[-1]]
+            continue
+        w = s[k-1:] - s[:S-k+1]
+        j = int(np.argmin(w))
+        out[g] = [s[j], s[j+k-1]]
+    return out
 
-    candidates = []
-    for d in glob.glob(os.path.join(path, "*")):
-        if os.path.isdir(d) and os.path.exists(os.path.join(d, "data_arrays.npz")):
-            candidates.append((d, os.path.getmtime(d)))
-    if not candidates:
-        raise FileNotFoundError(
-            f"Could not find a bundle under {path!r}. Expected a folder with data_arrays.npz."
-        )
-    # newest first
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    return candidates[0][0]
+def predictive_density_gamma(trace, X, samples=2000, rng=None):
+    from scipy.stats import gamma as sp_gamma
+    from scipy.special import logsumexp
+    a = flatten_draws(trace, "alpha"); t = flatten_draws(trace, "theta")
+    S, G = a.shape
+    if samples and S > samples:
+        rng = np.random.default_rng(None if rng is None else rng)
+        idx = rng.choice(S, samples, replace=False)
+        a, t = a[idx], t[idx]; S = samples
+    total = 0.0
+    for g in range(G):
+        y = X[g]
+        logp = sp_gamma.logpdf(y[:, None], a=a[:, g], scale=t[:, g])  # (n,S)
+        total += (np.log(np.exp(logp).mean(axis=1))).sum()            # log posterior mean density
+    return total / X.size
 
+def predictive_density_normal(trace, X, samples=2000, rng=None):
+    from scipy.stats import norm as sp_norm
+    mu = flatten_draws(trace, "mu")      # (S,G)
+    sg = flatten_draws(trace, "sigma")   # (S,G)
+    S, G = mu.shape
+    if samples and S > samples:
+        rng = np.random.default_rng(None if rng is None else rng)
+        idx = rng.choice(S, samples, replace=False)
+        mu, sg = mu[idx], sg[idx]; S = samples
+    total = 0.0
+    for g in range(G):
+        y = X[g]
+        logp = sp_norm.logpdf(y[:, None], loc=mu[:, g], scale=sg[:, g])
+        total += (np.log(np.exp(logp).mean(axis=1))).sum()
+    return total / X.size
 
-def _theta_samples_gamma(trace) -> np.ndarray:
-    # (S, G)
-    return flatten_draws(trace, "theta")
+def mismatch_index_var(trace_std, trace_bag, var_name, X_like):
+    """Mismatch index for a named posterior variable ('theta','alpha','mu','sigma')."""
+    Sstd = flatten_draws(trace_std, var_name).std(axis=0, ddof=1)
+    Sbag = flatten_draws(trace_bag, var_name).std(axis=0, ddof=1)
+    N = X_like.size
+    NvN = N * float(np.sum(Sstd**2))
+    MvsM = N * float(np.sum(Sbag**2))
+    return 1 - ((2 * NvN) / MvsM) if MvsM > NvN else np.nan
 
+def mismatch_index_gamma_func(trace_std, trace_bag, X_like, func):
+    """Mismatch for a derived Gamma quantity: func(alpha_draws, theta_draws)->(S,G)."""
+    a_std = flatten_draws(trace_std, "alpha"); t_std = flatten_draws(trace_std, "theta")
+    a_bag = flatten_draws(trace_bag, "alpha"); t_bag = flatten_draws(trace_bag, "theta")
+    q_std = func(a_std, t_std); q_bag = func(a_bag, t_bag)
+    Sstd = q_std.std(axis=0, ddof=1)
+    Sbag = q_bag.std(axis=0, ddof=1)
+    N = X_like.size
+    NvN = N * float(np.sum(Sstd**2))
+    MvsM = N * float(np.sum(Sbag**2))
+    return 1 - ((2 * NvN) / MvsM) if MvsM > NvN else np.nan
 
-def _alpha_samples_gamma(trace) -> np.ndarray:
-    return flatten_draws(trace, "alpha")
-
-
-def _theta_from_normal(trace) -> np.ndarray:
-    """
-    Map Normal posterior draws (mu, sigma) to Gamma-parameter space via
-      theta_tilde = sigma^2 / mu
-    Invalid (mu<=0 or sigma<=0) draws are dropped.
-    Returns: (S_eff, G)
-    """
-    if trace is None:
-        return None
-    mu = flatten_draws(trace, "mu")      # (S, G)
-    sg = flatten_draws(trace, "sigma")   # (S, G)
-    valid = (mu > 0.0) & (sg > 0.0)
-    # keep rows (across groups) that have at least one valid entry; invalid entries are masked out later
-    row_valid = valid.any(axis=1)
-    mu, sg, valid = mu[row_valid], sg[row_valid], valid[row_valid]
-    # avoid /0
-    eps = 1e-12
-    theta_tilde = (sg ** 2) / np.maximum(mu, eps)
-    # for invalid entries, set NaN and let np.nan* aggregations handle
-    theta_tilde[~valid] = np.nan
-    return theta_tilde
-
-
-def _post_mean(arr_2d: np.ndarray) -> np.ndarray:
-    # nanmean so Normal-mapped invalid entries don't break things
-    return np.nanmean(arr_2d, axis=0)
-
-
-def _coverage_from_draws(draws_2d: np.ndarray, truth: np.ndarray, prob=0.90, mask=None) -> float:
-    """
-    Coverage of central prob interval vs truth. Supports NaNs and optional boolean mask on groups.
-    """
-    if draws_2d is None:
-        return np.nan
-    if mask is None:
-        mask = np.ones_like(truth, dtype=bool)
-    # HDI using provided helper
-    hdi = hdi_min_width(draws_2d, prob=prob)  # (G, 2)
-    lo, hi = hdi[:, 0], hdi[:, 1]
-    ok = (truth >= lo) & (truth <= hi)
-    if mask is not None:
-        ok = ok[mask]
-    return float(np.nanmean(ok))
+def variance_ratio_from_mismatch(I):
+    """Return V_bag / V_std given mismatch I = 1 - 2*V_std/V_bag."""
+    if not np.isfinite(I): return np.nan
+    return 2.0 / (1.0 - I) if (1.0 - I) != 0 else np.inf
 
 
-def _abs_error_to_truth(post_mean: np.ndarray, truth: np.ndarray, mask=None) -> np.ndarray:
-    e = np.abs(post_mean - truth)
-    if mask is not None:
-        return e[mask]
-    return e
+# --- plotting ---
 
-
-# -----------------------
-# PLOTS
-# -----------------------
-
-def plot_all(outdir: str, save_dir: str = None):
+def plot_evaluation(outdir, save_dir=None, hdi_prob=0.90, samples_lpd=2000):
     if save_dir is None:
-        save_dir = os.path.join(outdir, "figs_all")
+        save_dir = os.path.join(outdir, "figs")
     os.makedirs(save_dir, exist_ok=True)
 
-    # Load bundle
+    # Load everything (Normal traces may be None if you didn't save them)
     (X_clean, X_contam,
-     tr_std_clean, tr_bag_clean, tr_std_cont, tr_bag_cont,
-     tr_std_norm, tr_bag_norm,
-     true_alpha, true_theta, contam_idx, meta) = load_bundle(outdir)
+     id_std_clean, id_bag_clean,
+     id_std_cont,  id_bag_cont,
+     id_std_norm,  id_bag_norm,
+     a_true, t_true, contam_idx, meta) = load_bundle(outdir)
 
     contam_idx = np.array(contam_idx, dtype=bool)
     clean_idx  = ~contam_idx
-    G = true_theta.shape[0]
-    x = np.arange(G)
+    G = t_true.shape[0]
 
-    # Precompute draws
-    tS_clean = _theta_samples_gamma(tr_std_clean)     # (S, G)
-    tB_clean = _theta_samples_gamma(tr_bag_clean)
-    tS_cont  = _theta_samples_gamma(tr_std_cont)
-    tB_cont  = _theta_samples_gamma(tr_bag_cont)
+    # ---------- 1) Predictive accuracy: 6 bars (Gamma clean/contam + Normal clean; Std & Bag) ----------
+    lpd_vals = []
+    labels   = []
 
-    # Normal mapped -> theta_tilde
-    tS_norm = _theta_from_normal(tr_std_norm) if tr_std_norm is not None else None
-    tB_norm = _theta_from_normal(tr_bag_norm) if tr_bag_norm is not None else None
+    # Gamma — clean
+    lpd_vals.append(predictive_density_gamma(id_std_clean, X_clean, samples=samples_lpd)); labels.append("Γ clean – Std")
+    lpd_vals.append(predictive_density_gamma(id_bag_clean, X_clean, samples=samples_lpd)); labels.append("Γ clean – Bag")
 
-    # Colors by model; linestyle by Std/Bag
-    C_gamma_cont = "C0"
-    C_gamma_clean= "C1"
-    C_normal     = "C2"
+    # Gamma — contaminated
+    lpd_vals.append(predictive_density_gamma(id_std_cont,  X_contam, samples=samples_lpd)); labels.append("Γ contam – Std")
+    lpd_vals.append(predictive_density_gamma(id_bag_cont,  X_contam, samples=samples_lpd)); labels.append("Γ contam – Bag")
 
-    # 1) Posterior θ for each contaminated group — combine Gamma(clean), Gamma(contam), Normal(θ̃)
+    # Normal — clean (optional)
+    if (id_std_norm is not None) and (id_bag_norm is not None):
+        lpd_vals.append(predictive_density_normal(id_std_norm, X_clean, samples=samples_lpd)); labels.append("Normal clean – Std")
+        lpd_vals.append(predictive_density_normal(id_bag_norm, X_clean, samples=samples_lpd)); labels.append("Normal clean – Bag")
+
+    x = np.arange(len(lpd_vals))
+    plt.figure(figsize=(9, 4.2))
+    plt.bar(x, lpd_vals, width=0.6)
+    plt.xticks(x, labels, rotation=20, ha="right")
+    plt.ylabel("Avg log predictive density (higher is better)")
+    plt.title("Predictive accuracy across methods/datasets")
+    plt.grid(axis="y", alpha=0.25)
+    for i, v in enumerate(lpd_vals):
+        plt.text(i, v, f"{v:.3f}", va="bottom", ha="center", fontsize=8)
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "predictive_accuracy_all.png"), dpi=150)
+    plt.close()
+
+    # ---------- 2) Variance inflation ratio (scale-like): Γ θ (clean/contam), Normal σ (clean) ----------
+    bars_scale = []
+    labels_scale = []
+
+    # Gamma θ mismatch (clean & contaminated)
+    I_g_clean  = mismatch_index_var(id_std_clean, id_bag_clean, "theta", X_clean)
+    I_g_cont   = mismatch_index_var(id_std_cont,  id_bag_cont,  "theta", X_contam)
+    r_g_clean  = variance_ratio_from_mismatch(I_g_clean)
+    r_g_cont   = variance_ratio_from_mismatch(I_g_cont)
+    bars_scale += [r_g_clean, r_g_cont]; labels_scale += ["Γ clean: θ", "Γ contam: θ"]
+
+    # Normal σ mismatch (clean), if available
+    if (id_std_norm is not None) and (id_bag_norm is not None):
+        I_n_sigma  = mismatch_index_var(id_std_norm, id_bag_norm, "sigma", X_clean)
+        r_n_sigma  = variance_ratio_from_mismatch(I_n_sigma)
+        bars_scale += [r_n_sigma]; labels_scale += ["Normal clean: σ"]
+
+    x = np.arange(len(bars_scale))
+    plt.figure(figsize=(8.5, 4.0))
+    plt.bar(x, bars_scale, width=0.55)
+    plt.axhline(2.0, color="k", ls="--", lw=1, alpha=0.6)
+    plt.xticks(x, labels_scale, rotation=15, ha="right")
+    plt.ylabel(r"Variance inflation $V_{\rm bag}/V_{\rm std}$")
+    plt.title("Variance inflation (scale-like parameters)")
+    plt.grid(axis="y", alpha=0.25)
+    # annotate mismatch index on bars
+    for i, r in enumerate(bars_scale):
+        I = [I_g_clean, I_g_cont, I_n_sigma][i] if (i < 2 or (id_std_norm is not None and id_bag_norm is not None)) else np.nan
+        txt = f"r={r:.2f}" if np.isfinite(r) else "r=NA"
+        if np.isfinite(I): txt += f"\nI={I:.3f}"
+        plt.text(i, r if np.isfinite(r) else 0.0, txt, ha="center", va="bottom", fontsize=8)
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "variance_inflation_scale.png"), dpi=150)
+    plt.close()
+
+    # ---------- 3) Variance inflation ratio (location-like): Γ mean αθ (clean/contam), Normal μ (clean) ----------
+    bars_loc = []
+    labels_loc = []
+    I_gm_clean = mismatch_index_gamma_func(id_std_clean, id_bag_clean, X_clean, lambda a, t: a * t)
+    I_gm_cont  = mismatch_index_gamma_func(id_std_cont,  id_bag_cont,  X_contam, lambda a, t: a * t)
+    r_gm_clean = variance_ratio_from_mismatch(I_gm_clean)
+    r_gm_cont  = variance_ratio_from_mismatch(I_gm_cont)
+    bars_loc  += [r_gm_clean, r_gm_cont]; labels_loc += ["Γ clean: mean (αθ)", "Γ contam: mean (αθ)"]
+
+    if (id_std_norm is not None) and (id_bag_norm is not None):
+        I_n_mu = mismatch_index_var(id_std_norm, id_bag_norm, "mu", X_clean)
+        r_n_mu = variance_ratio_from_mismatch(I_n_mu)
+        bars_loc += [r_n_mu]; labels_loc += ["Normal clean: μ"]
+
+    x = np.arange(len(bars_loc))
+    plt.figure(figsize=(8.5, 4.0))
+    plt.bar(x, bars_loc, width=0.55, color="#6aa9ff")
+    plt.axhline(2.0, color="k", ls="--", lw=1, alpha=0.6)
+    plt.xticks(x, labels_loc, rotation=15, ha="right")
+    plt.ylabel(r"Variance inflation $V_{\rm bag}/V_{\rm std}$")
+    plt.title("Variance inflation (location-like parameters)")
+    plt.grid(axis="y", alpha=0.25)
+    for i, r in enumerate(bars_loc):
+        I = [I_gm_clean, I_gm_cont, I_n_mu][i] if (i < 2 or (id_std_norm is not None and id_bag_norm is not None)) else np.nan
+        txt = f"r={r:.2f}" if np.isfinite(r) else "r=NA"
+        if np.isfinite(I): txt += f"\nI={I:.3f}"
+        plt.text(i, r if np.isfinite(r) else 0.0, txt, ha="center", va="bottom", fontsize=8)
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "variance_inflation_location.png"), dpi=150)
+    plt.close()
+
+    # ---------- 4) θ posterior densities for contaminated groups ----------
+    tS_cont = flatten_draws(id_std_cont, "theta")
+    tB_cont = flatten_draws(id_bag_cont, "theta")
     for g in np.where(contam_idx)[0]:
-        plt.figure(figsize=(7.0, 4.2))
-        # choose bins based on *largest* available sample set
-        sample_sizes = [tS_cont.shape[0], tB_cont.shape[0], tS_clean.shape[0], tB_clean.shape[0]]
-        if tS_norm is not None: sample_sizes.append(tS_norm.shape[0])
-        bins = max(25, int(np.sqrt(max(sample_sizes)) // 2))
-
-        # Gamma (contaminated fit)
-        plt.hist(tS_cont[:, g], bins=bins, density=True, histtype='step', linewidth=1.8,
-                 label="Gamma-contam Std", color=C_gamma_cont)
-        plt.hist(tB_cont[:, g], bins=bins, density=True, histtype='step', linestyle='--', linewidth=2.0,
-                 label="Gamma-contam Bag", color=C_gamma_cont)
-
-        # Gamma (clean fit) — acts as “counterfactual baseline”
-        plt.hist(tS_clean[:, g], bins=bins, density=True, histtype='step', linestyle=':', linewidth=1.5,
-                 label="Gamma-clean Std", color=C_gamma_clean)
-        plt.hist(tB_clean[:, g], bins=bins, density=True, histtype='step', linestyle='--', linewidth=1.8,
-                 label="Gamma-clean Bag", color=C_gamma_clean)
-
-        # Normal mapped θ̃ (clean fit)
-        if tS_norm is not None:
-            validS = ~np.isnan(tS_norm[:, g])
-            validB = ~np.isnan(tB_norm[:, g])
-            if validS.any():
-                plt.hist(tS_norm[validS, g], bins=bins, density=True, histtype='step', linestyle='-.', linewidth=1.8,
-                         label="Normal (θ̃) Std", color=C_normal)
-            if validB.any():
-                plt.hist(tB_norm[validB, g], bins=bins, density=True, histtype='step', linestyle=(0,(3,1,1,1)), linewidth=2.0,
-                         label="Normal (θ̃) Bag", color=C_normal)
-
-        plt.axvline(true_theta[g], linestyle="-.", linewidth=2, color="k", label=r"$\theta_{\mathrm{true}}$")
-        plt.title(f"Posterior of $\\theta$ — group {g} (contaminated group)")
-        plt.xlabel(r"$\\theta$")
-        plt.ylabel("density")
-        plt.legend(fontsize=8, ncol=2)
+        plt.figure(figsize=(5.2, 3.6))
+        bins = max(20, int(np.sqrt(tS_cont.shape[0]) // 2))
+        plt.hist(tS_cont[:, g], bins=bins, density=True, alpha=0.45, label="Std (contam)")
+        plt.hist(tB_cont[:, g], bins=bins, density=True, alpha=0.45, label="BayesBag (contam)")
+        plt.axvline(t_true[g], color="k", ls="--", lw=2, label="θ true")
+        plt.title(f"Posterior θ for group {g} (contaminated)")
+        plt.xlabel("θ"); plt.ylabel("density"); plt.legend()
         plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, f"theta_posterior_g{g}_COMBINED.png"), dpi=150)
+        plt.savefig(os.path.join(save_dir, f"theta_posterior_g{g}.png"), dpi=150)
         plt.close()
 
-    # 2) Posterior ranks — contaminated fits (Gamma only; this is the apples-to-apples view)
-    rS = posterior_rank(tS_cont, true_theta)
-    rB = posterior_rank(tB_cont, true_theta)
-    plt.figure(figsize=(7.2, 4.2))
-    plt.scatter(x[clean_idx], rS[clean_idx], marker="o", s=22, label="Gamma-contam Std (clean groups)", color=C_gamma_cont)
-    plt.scatter(x[clean_idx], rB[clean_idx], marker="x", s=28, label="Gamma-contam Bag (clean groups)", color=C_gamma_cont)
-    plt.scatter(x[contam_idx], rS[contam_idx], marker="o", s=70, label="Gamma-contam Std (contam)", color=C_gamma_cont)
-    plt.scatter(x[contam_idx], rB[contam_idx], marker="x", s=90, label="Gamma-contam Bag (contam)", color=C_gamma_cont)
+    # ---------- 5) Posterior rank scatter (θ), contaminated fits ----------
+    rS = posterior_rank(tS_cont, t_true)
+    rB = posterior_rank(tB_cont, t_true)
+    xg = np.arange(G)
+    plt.figure(figsize=(7, 3.8))
+    plt.scatter(xg[clean_idx],  rS[clean_idx],  marker="o",  label="Std (clean groups)")
+    plt.scatter(xg[clean_idx],  rB[clean_idx],  marker="x",  label="Bag (clean groups)")
+    plt.scatter(xg[contam_idx], rS[contam_idx], marker="o",  s=80, label="Std (contam)")
+    plt.scatter(xg[contam_idx], rB[contam_idx], marker="x",  s=80, label="Bag (contam)")
     plt.axhline(0.5, color="k", linestyle="--", linewidth=1)
     plt.fill_between([-0.5, G-0.5], 0.05, 0.95, alpha=0.08, step="pre")
     plt.xlim(-0.5, G-0.5); plt.ylim(-0.02, 1.02)
-    plt.xlabel("group"); plt.ylabel(r"posterior rank of $\theta_{\mathrm{true}}$")
-    plt.title("Posterior rank of $\\theta_{true}$ by group — Gamma (contaminated fits)")
-    plt.legend(fontsize=8)
+    plt.xlabel("group"); plt.ylabel("posterior rank of θ_true")
+    plt.title("Posterior rank of θ_true (contaminated fits)")
+    plt.legend(loc="best", fontsize=8)
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "posterior_ranks_theta_GAMMA_CONTAM.png"), dpi=150)
+    plt.savefig(os.path.join(save_dir, "posterior_ranks_theta.png"), dpi=150)
     plt.close()
 
-    # 3) Posterior ranks — clean fits (Gamma-clean vs Normal mapped θ̃)
-    rS_gcl = posterior_rank(tS_clean, true_theta)
-    rB_gcl = posterior_rank(tB_clean, true_theta)
-    plt.figure(figsize=(7.2, 4.2))
-    plt.scatter(x, rS_gcl, marker="o", s=24, label="Gamma-clean Std", color=C_gamma_clean)
-    plt.scatter(x, rB_gcl, marker="x", s=30, label="Gamma-clean Bag", color=C_gamma_clean)
-    if tS_norm is not None:
-        rS_nrm = posterior_rank(tS_norm, true_theta)
-        rB_nrm = posterior_rank(tB_norm, true_theta)
-        plt.scatter(x, rS_nrm, marker="o", facecolors="none", s=40, label="Normal (θ̃) Std", color=C_normal)
-        plt.scatter(x, rB_nrm, marker="x", s=40, label="Normal (θ̃) Bag", color=C_normal)
-    plt.axhline(0.5, color="k", linestyle="--", linewidth=1)
-    plt.fill_between([-0.5, G-0.5], 0.05, 0.95, alpha=0.08, step="pre")
-    plt.xlim(-0.5, G-0.5); plt.ylim(-0.02, 1.02)
-    plt.xlabel("group"); plt.ylabel(r"posterior rank of $\theta_{\mathrm{true}}$")
-    plt.title("Posterior rank — clean fits (Gamma vs Normal mapped to θ̃)")
-    plt.legend(fontsize=8, ncol=2)
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "posterior_ranks_theta_CLEAN_COMBINED.png"), dpi=150)
-    plt.close()
-
-    # 4) Stability on unaffected groups (Gamma only): |Δθ| between contaminated vs clean fit
-    d_std = np.abs(_post_mean(tS_cont)[clean_idx] - _post_mean(tS_clean)[clean_idx])
-    d_bag = np.abs(_post_mean(tB_cont)[clean_idx] - _post_mean(tB_clean)[clean_idx])
+    # ---------- 6) Stability on unaffected groups: |Δθ| bars ----------
+    def post_mean_theta(trace): return flatten_draws(trace, "theta").mean(axis=0)
+    t_sc = post_mean_theta(id_std_clean);  t_sx = post_mean_theta(id_std_cont)
+    t_bc = post_mean_theta(id_bag_clean);  t_bx = post_mean_theta(id_bag_cont)
+    d_std = np.abs(t_sx[clean_idx] - t_sc[clean_idx])
+    d_bag = np.abs(t_bx[clean_idx] - t_bc[clean_idx])
     idxs  = np.where(clean_idx)[0]
     width = 0.38
-    base = np.arange(len(idxs))
-    plt.figure(figsize=(7.2, 4.0))
-    plt.bar(base - width/2, d_std, width, label="Gamma Std")
-    plt.bar(base + width/2, d_bag, width, label="Gamma BayesBag")
-    plt.xticks(base, idxs)
+    plt.figure(figsize=(7, 3.8))
+    plt.bar(np.arange(len(idxs)) - width/2, d_std, width, label="Std")
+    plt.bar(np.arange(len(idxs)) + width/2, d_bag, width, label="BayesBag")
+    plt.xticks(np.arange(len(idxs)), idxs)
     plt.ylabel("|Δθ| (clean vs contaminated fit)")
     plt.xlabel("clean groups")
-    plt.title("Stability on unaffected groups — smaller is better (Gamma)")
+    plt.title("Stability on unaffected groups")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "stability_theta_clean_groups_GAMMA.png"), dpi=150)
+    plt.savefig(os.path.join(save_dir, "stability_theta_clean_groups.png"), dpi=150)
     plt.close()
 
-    # 5) Coverage on clean groups under contaminated fit (Gamma) + Normal-on-clean mapped θ̃
-    target = 0.90
-    cov_gS = _coverage_from_draws(tS_cont, true_theta, prob=target, mask=clean_idx)
-    cov_gB = _coverage_from_draws(tB_cont, true_theta, prob=target, mask=clean_idx)
-    # Normal (clean) θ̃ coverage vs θ_true on clean groups
-    cov_nS = _coverage_from_draws(tS_norm, true_theta, prob=target, mask=clean_idx) if tS_norm is not None else np.nan
-    cov_nB = _coverage_from_draws(tB_norm, true_theta, prob=target, mask=clean_idx) if tB_norm is not None else np.nan
+    # ---------- 7) (Optional) Normal model per-group HDIs vs Gamma truth ----------
+    if (id_std_norm is not None) and (id_bag_norm is not None):
+        mu_true = a_true * t_true
+        sg_true = np.sqrt(a_true) * t_true
 
-    labels = ["Gamma Std (contam fit)", "Gamma Bag (contam fit)", "Normal Std (θ̃ clean)", "Normal Bag (θ̃ clean)"]
-    covs   = [cov_gS, cov_gB, cov_nS, cov_nB]
-    plt.figure(figsize=(7.0, 4.0))
-    pos = np.arange(len(labels))
-    plt.bar(pos, covs)
-    plt.axhline(target, color="k", linestyle="--", linewidth=1, label=f"target {target:.2f}")
-    plt.xticks(pos, labels, rotation=15)
-    plt.ylim(0, 1)
-    plt.ylabel(f"coverage on clean groups ({int(target*100)}% PI)")
-    plt.title("Nominal coverage comparison on clean groups")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "coverage_clean_groups_COMBINED.png"), dpi=150)
-    plt.close()
+        muS = flatten_draws(id_std_norm, "mu");    muB = flatten_draws(id_bag_norm, "mu")
+        sgS = flatten_draws(id_std_norm, "sigma"); sgB = flatten_draws(id_bag_norm, "sigma")
 
-    # 6) Absolute posterior-mean error on contaminated groups (Gamma)
-    cont_ids = np.where(contam_idx)[0]
-    if len(cont_ids) > 0:
-        e_std = _abs_error_to_truth(_post_mean(tS_cont), true_theta, mask=contam_idx)
-        e_bag = _abs_error_to_truth(_post_mean(tB_cont), true_theta, mask=contam_idx)
-        base = np.arange(len(cont_ids))
-        width = 0.38
-        plt.figure(figsize=(7.0, 4.0))
-        plt.bar(base - width/2, e_std, width, label="Gamma Std")
-        plt.bar(base + width/2, e_bag, width, label="Gamma BayesBag")
-        plt.xticks(base, cont_ids)
-        plt.xlabel("contaminated groups")
-        plt.ylabel(r"$|\mathbb{E}[\theta\mid y] - \theta_\mathrm{true}|$")
-        plt.title("Absolute posterior-mean error on contaminated groups — smaller is better (Gamma)")
-        plt.legend()
+        muS_h = hdi_min_width(muS, prob=hdi_prob)
+        muB_h = hdi_min_width(muB, prob=hdi_prob)
+        sgS_h = hdi_min_width(sgS, prob=hdi_prob)
+        sgB_h = hdi_min_width(sgB, prob=hdi_prob)
+
+        xg = np.arange(G)
+
+        # μ intervals
+        plt.figure(figsize=(8.5, 4.0))
+        yS = muS.mean(axis=0); yB = muB.mean(axis=0)
+        yerrS = np.vstack([yS - muS_h[:, 0], muS_h[:, 1] - yS])
+        yerrB = np.vstack([yB - muB_h[:, 0], muB_h[:, 1] - yB])
+        plt.errorbar(xg - 0.06, yS, yerr=yerrS, fmt='o', capsize=3, label='Std')
+        plt.errorbar(xg + 0.06, yB, yerr=yerrB, fmt='s', capsize=3, label='BayesBag')
+        plt.plot(xg, mu_true, 'k--', lw=1.2, label='μ (Gamma truth)')
+        plt.xlabel("group"); plt.ylabel("μ")
+        plt.title("Normal model: μ posterior 90% intervals vs Gamma truth")
+        plt.xticks(xg); plt.grid(alpha=0.2); plt.legend()
         plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, "abs_error_contaminated_groups_GAMMA.png"), dpi=150)
+        plt.savefig(os.path.join(save_dir, "normal_mu_intervals.png"), dpi=150)
         plt.close()
 
-    # 7) Rank-uniformity histogram on clean groups (combine Gamma-clean and Normal θ̃)
-    bins = 10
-    plt.figure(figsize=(6.8, 4.0))
-    plt.hist(posterior_rank(tS_clean, true_theta)[clean_idx], bins=bins, range=(0,1),
-             histtype='step', linewidth=1.6, label="Gamma-clean Std")
-    plt.hist(posterior_rank(tB_clean, true_theta)[clean_idx], bins=bins, range=(0,1),
-             histtype='step', linestyle='--', linewidth=1.8, label="Gamma-clean Bag")
-    if tS_norm is not None:
-        plt.hist(posterior_rank(tS_norm, true_theta)[clean_idx], bins=bins, range=(0,1),
-                 histtype='step', linestyle='-.', linewidth=1.6, label="Normal (θ̃) Std")
-        plt.hist(posterior_rank(tB_norm, true_theta)[clean_idx], bins=bins, range=(0,1),
-                 histtype='step', linestyle=(0,(3,1,1,1)), linewidth=1.8, label="Normal (θ̃) Bag")
-    plt.axhline(np.sum(clean_idx) / bins, color='k', linestyle=':', linewidth=1)
-    plt.xlabel(r"rank of $\theta_\mathrm{true}$ (clean groups; should be ~uniform)")
-    plt.ylabel("count")
-    plt.title("Rank-uniformity diagnostic — clean groups (combined)")
-    plt.legend(fontsize=8)
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "rank_hist_clean_COMBINED.png"), dpi=150)
-    plt.close()
-
-    # 8) (Optional) Coverage curve on clean groups under contaminated fit (Gamma)
-    probs = np.linspace(0.5, 0.95, 10)
-    cov_std_curve, cov_bag_curve = [], []
-    for p in probs:
-        cov_std_curve.append(_coverage_from_draws(tS_cont, true_theta, prob=p, mask=clean_idx))
-        cov_bag_curve.append(_coverage_from_draws(tB_cont, true_theta, prob=p, mask=clean_idx))
-    plt.figure(figsize=(6.6, 4.0))
-    plt.plot(probs, cov_std_curve, marker="o", label="Gamma-contam Std")
-    plt.plot(probs, cov_bag_curve, marker="x", label="Gamma-contam Bag")
-    plt.plot([0.5, 0.95], [0.5, 0.95], linestyle="--", color="k", label="ideal")
-    plt.xlabel("nominal interval probability")
-    plt.ylabel("empirical coverage (clean groups)")
-    plt.title("Coverage curve — contaminated fit on clean groups (Gamma)")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "coverage_curve_clean_GAMMA.png"), dpi=150)
-    plt.close()
+        # σ intervals
+        plt.figure(figsize=(8.5, 4.0))
+        yS = sgS.mean(axis=0); yB = sgB.mean(axis=0)
+        yerrS = np.vstack([yS - sgS_h[:, 0], sgS_h[:, 1] - yS])
+        yerrB = np.vstack([yB - sgB_h[:, 0], sgB_h[:, 1] - yB])
+        plt.errorbar(xg - 0.06, yS, yerr=yerrS, fmt='o', capsize=3, label='Std')
+        plt.errorbar(xg + 0.06, yB, yerr=yerrB, fmt='s', capsize=3, label='BayesBag')
+        plt.plot(xg, sg_true, 'k--', lw=1.2, label='σ (Gamma truth)')
+        plt.xlabel("group"); plt.ylabel("σ")
+        plt.title("Normal model: σ posterior 90% intervals vs Gamma truth")
+        plt.xticks(xg); plt.grid(alpha=0.2); plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, "normal_sigma_intervals.png"), dpi=150)
+        plt.close()
 
     print("Saved figures to:", save_dir)
 
@@ -317,11 +303,7 @@ def plot_all(outdir: str, save_dir: str = None):
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
-        print("Usage: python plots_combo_from_bundle.py <bundle_or_runs_dir> [<save_dir>]")
-        raise SystemExit(1)
-    in_path = _find_bundle_dir(sys.argv[1])
-    save_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(in_path, "figs_all")
-    os.makedirs(save_dir, exist_ok=True)
-    print("Bundle dir:", in_path)
-    print("Save dir  :", save_dir)
-    plot_all(in_path, save_dir)
+        print("Usage: python plots_synth.py <bundle_dir> [<save_dir>]"); raise SystemExit(1)
+    outdir = sys.argv[1]
+    save_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(outdir, "figs")
+    plot_evaluation(outdir, save_dir)
