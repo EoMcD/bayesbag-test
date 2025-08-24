@@ -325,13 +325,17 @@ def main():
         eps=0.1, scale_mult=6, contam_groups=[1, 8],
         draws=400, tune=200, chains=4, B=50, m_frac=1.0
     )
-    d
-                trace_bag_clean=trace_bag_clean,
-                trace_std_contam=trace_std_contam,
-                trace_bag_contam=trace_bag_contam,
-                true_alpha=a, true_theta=theta,
-                contam_idx=[False, True, False, False, False, False, False, False, True, False],
-                meta=meta)
+
+    outdir = default_run_dir()  # e.g., runs/20250824_153210
+    save_bundle(outdir,
+            X_clean=X, X_contam=Xc,
+            trace_std_clean=trace_std_clean,
+            trace_bag_clean=trace_bag_clean,
+            trace_std_contam=trace_std_contam,
+            trace_bag_contam=trace_bag_contam,
+            true_alpha=a, true_theta=theta,
+            contam_idx=[False, True, False, False, False, False, False, False, True, False],
+            meta=meta)
     
     print("Saved bundle to:", outdir)
     
