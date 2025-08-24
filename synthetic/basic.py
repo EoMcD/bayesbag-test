@@ -195,7 +195,7 @@ def bayesbag_normal(
 
 
 # CONTAM
-def contaminate_scale_inflate(X,a,theta,groups=(0,),eps=0.1,scale_mult=5,seed=0):
+def contaminate_scale_inflate(X,a,theta,groups=(0,),eps=0.15,scale_mult=5,seed=0):
     rng = np.random.default_rng(seed)
     Xc = X.copy()
     G,n = X.shape
