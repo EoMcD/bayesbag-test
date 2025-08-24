@@ -139,4 +139,6 @@ with open("out/microcredit_bayesbag.pkl", "wb") as f:
     pickle.dump({"bayesbag": boot_fits, "boot_data": boot_data}, f)
 
 with open("out/microcredit.pkl", "wb") as f:
-    pickle.dump({"mg": fit_meager(data)}, f)
+    # keep only what eval needs
+    pickle.dump({"mg": fit_meager(data), "data": data[["g","t","y"]]}, f)
+
