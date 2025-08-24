@@ -5,6 +5,8 @@ from scipy.special import logsumexp
 import pymc as pm
 import arviz as az
 from tqdm.auto import tqdm
+import os, json
+from datetime import datetime
 
 # data = gamma.rvs(a=3,scale=2,size=1000)
 
@@ -121,8 +123,40 @@ def contaminate_scale_inflate(X,a,theta,groups=(0,),eps=0.1,scale_mult=5,seed=0)
         Xc[g,m] = gamma.rvs(a=a[g],scale=theta[g]*scale_mult,size=m.sum(),random_state=rng)
     return Xc
 
-# EVAL
+# SAVING
+def save_bundle(outdir,
+                X_clean, X_contam,
+                trace_std_clean, trace_bag_clean,
+                trace_std_contam, trace_bag_contam,
+                true_alpha, true_theta, contam_idx,
+                meta=None):
+    os.makedirs(outdir, exist_ok=True)
 
+    # arrays
+    np.savez(os.path.join(outdir, "data_arrays.npz"),
+             X_clean=X_clean, X_contam=X_contam,
+             true_alpha=true_alpha, true_theta=true_theta,
+             contam_idx=np.array(contam_idx, dtype=bool))
+
+    # traces (ArviZ InferenceData)
+    trace_std_clean.to_netcdf(os.path.join(outdir, "trace_std_clean.nc"))
+    trace_bag_clean.to_netcdf(os.path.join(outdir, "trace_bag_clean.nc"))
+    trace_std_contam.to_netcdf(os.path.join(outdir, "trace_std_contam.nc"))
+    trace_bag_contam.to_netcdf(os.path.join(outdir, "trace_bag_contam.nc"))
+
+    # metadata/config
+    meta = {} if meta is None else dict(meta)
+    meta.setdefault("created_at", datetime.now().isoformat(timespec="seconds"))
+    with open(os.path.join(outdir, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
+def default_run_dir(root="runs"):
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    outdir = os.path.join(root, ts)
+    return outdir
+
+
+# EVAL
 def flatten_draws(trace, var):
     da = trace.posterior[var]            
     da = da.stack(sample=("chain", "draw"))
@@ -255,18 +289,18 @@ def evaluate_methods(X_clean, X_contam,
 # MAIN
 def main():
     # FITTING
-    trace_std_clean = fit_gamma(X,draws=1000,tune=500,chains=4)
+    trace_std_clean = fit_gamma(X,draws=400,tune=200,chains=4)
     # print(eval_gamma(trace_std_clean))
 
-    trace_bb_clean = bayesbag_gamma(X,B=50,draws=1000,tune=500,chains=4)
+    trace_bb_clean = bayesbag_gamma(X,B=50,draws=400,tune=200,chains=4)
     # print(trace_bb_clean["summary"])
     trace_bag_clean = trace_bb_clean["trace"]
 
     # CONTAMINATION
     Xc = contaminate_scale_inflate(X,a,theta,groups=(1,8),eps=0.1,scale_mult=6,seed=42)
 
-    trace_std_contam = fit_gamma(Xc,draws=1000,tune=500,chains=4)
-    trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=1000,tune=500,chains=4)
+    trace_std_contam = fit_gamma(Xc,draws=400,tune=200,chains=4)
+    trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=400,tune=200,chains=4)
     trace_bag_contam = trace_bb_contam["trace"]
 
     # EVALUATION, PURELY CLEAN
@@ -283,12 +317,34 @@ def main():
     # print(f"HDI width α (bag/std): {m_bag['alpha_hdi_width']/m_std['alpha_hdi_width']:.2f}")
     # print(f"HDI width θ (bag/std): {m_bag['theta_hdi_width']/m_std['theta_hdi_width']:.2f}")
 
-    # EVALUATION, CLEAN AND CONTAM
-    contam_groups = [False, True, False, False, False, False, False, False, True, False]
-    evaluate_methods(X, Xc,
-                 trace_std_clean, trace_bag_clean,
-                 trace_std_contam, trace_bag_contam,
-                 a, theta, contam_groups, hdi_prob=0.90)
+    # SAVING
+    # Example meta you might want to record:
+    meta = dict(
+        groups=int(X.shape[0]),
+        per_group=int(X.shape[1]),
+        eps=0.1, scale_mult=6, contam_groups=[1, 8],
+        draws=400, tune=200, chains=4, B=50, m_frac=1.0
+    )
+    
+    outdir = default_run_dir()  # e.g., runs/20250824_153210
+    save_bundle(outdir,
+                X_clean=X, X_contam=Xc,
+                id_std_clean=trace_std_clean,
+                id_bag_clean=trace_bag_clean,
+                id_std_contam=trace_std_contam,
+                id_bag_contam=trace_bag_contam,
+                true_alpha=a, true_theta=theta,
+                contam_idx=[False, True, False, False, False, False, False, False, True, False],
+                meta=meta)
+    
+    print("Saved bundle to:", outdir)
+    
+    # # EVALUATION, CLEAN AND CONTAM
+    # contam_groups = [False, True, False, False, False, False, False, False, True, False]
+    # evaluate_methods(X, Xc,
+    #              trace_std_clean, trace_bag_clean,
+    #              trace_std_contam, trace_bag_contam,
+    #              a, theta, contam_groups, hdi_prob=0.90)
 
 if __name__ == "__main__":
     main()
