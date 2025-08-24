@@ -118,19 +118,19 @@ def fit_meager(data, n_samp=4000, n_warmup=2000, thin=1):
 print("Models made")
 
 # --- BAYESBAG PART, WIP ---
+from sklearn.utils import resample
+
 n_boot = 20
-boot_fits = []
-boot_data = []
+boot_fits, boot_data = [], []
 
 for i in range(n_boot):
     print(f"Running bootstrap {i+1} of {n_boot}")
-
+    # stratify by (site, treatment)
     boot_i = (
-        data.groupby("g", group_keys=False)
-        .apply(lambda g: resample(g, replace=True))
-        .reset_index(drop=True)
+        data.groupby(["g", "t"], group_keys=False)
+            .apply(lambda df: resample(df, replace=True, n_samples=len(df), random_state=10_000 + i))
+            .reset_index(drop=True)
     )
-
     boot_data.append(boot_i)
     fit = fit_meager(boot_i)
     boot_fits.append(fit)
