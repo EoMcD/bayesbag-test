@@ -373,8 +373,8 @@ def evaluate_methods(
               f"bag={np.mean(m_bagN['sg_rank']):.2f}±{np.std(m_bagN['sg_rank']):.2f}")
 
         # Mismatch index for Normal model (μ and σ)
-        mi_mu = mismatch_index_var(trace_std_norm, trace_bag_norm, "mu", X_clean)
-        mi_sg = mismatch_index_var(trace_std_norm, trace_bag_norm, "sigma", X_clean)
+        mi_mu = mismatch_index_theta(trace_std_norm, trace_bag_norm, "mu", X_clean)
+        mi_sg = mismatch_index_theta(trace_std_norm, trace_bag_norm, "sigma", X_clean)
         print("\n=== [Normal, clean data] Mismatch index (μ, σ) ===")
         print(f"Mismatch μ: {mi_mu:.4f}" if np.isfinite(mi_mu) else "Mismatch μ: nan")
         print(f"Mismatch σ: {mi_sg:.4f}" if np.isfinite(mi_sg) else "Mismatch σ: nan")
