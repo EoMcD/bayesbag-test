@@ -113,6 +113,78 @@ def bayesbag_gamma(X, B=50, draws=4000, tune=2000, chains=4,
     summary = eval_gamma(trace_bagged, hdi=hdi)
     return {"trace": trace_bagged, "summary": summary}
 
+# NORMAL MODEL
+def fit_normal(X, draws=4000, tune=200, chains=4, seed=None, progressbar=False, prior_mu_loc=6.0, prior_mu_scale=2.0, prior_tau_scale=2.0):
+    X = np.asarray(X); G = X.shape[0]
+
+    with pm.Model(coords={"group": np.arange(G)}) as m:
+        # hyperpriors
+        mu_mu = pm.Normal("mu_mu", mu=prior_mu_loc, sigma=prior_mu_scale)
+        tau_mu = pm.HalfNormal("tau_mu", sigma=prior_tau_scale)
+
+        mu_log_sigma = pm.Normal("mu_log_sigma", mu=np.log(prior_sigma_median), sigma=prior_sigma_log_sd)
+        sigma_log_sigma = pm.HalfNormal("sigma_log_sigma", sigma=prior_sigma_log_sd)
+
+        # group-level params
+        mu = pm.Normal("mu", mu=mu_mu, sigma=tau_mu, dims="group")
+        sigma = pm.LogNormal("sigma", mu=mu_log_sigma, sigma=sigma_log_sigma, dims="group")
+
+        # likelihood
+        for g in range(G):
+            pm.Normal(f"y_{g}", mu=mu[g], sigma=sigma[g], observed=X[g])
+
+        idata = pm.sample(
+            draws=draws, tune=tune, chains=chains,
+            random_seed=seed, target_accept=0.9,
+            progressbar=progressbar, return_inferencedata=True
+        )
+    return idata
+
+def eval_normal(idata, hdi=0.90):
+    post = idata.posterior
+    keys = ["mu_mu","tau_mu","mu_log_sigma","sigma_log_sigma","mu","sigma"]
+    return az.summary(post[keys], hdi_prob=hdi)
+
+def bayesbag_normal(X, B=50, draws=400, tune=2000, chains=4, seed=0, show_progress=True, show_health=True, m_frac=1.0, **fit_kwargs):
+    rng = np.random.default_rng(seed)
+    X = np.asarray(X)
+    groups, per_group = X.shape
+
+    bagged = []
+    iterator = range(B)
+    if show_progress:
+        iterator = tqdm(iterator, desc="BayesBag (Normal) bootstraps", unit="fit")
+
+    for b in iterator:
+        Xb = np.empty_like(X)
+        m=mfactor*per_group
+        for g in range(groups):
+            seed_b = rng.integers(1_000_000_000)
+            idx_m = rng.integers(0, per_group, size=m)
+            # if m < per_group:                                    
+            #     pad = rng.integers(0, m, size=per_group - m)
+            #     idx_full = np.concatenate([idx_m, idx_m[pad]])
+            # else:
+            #     idx_full = rng.integers(0, per_group, size=per_group)
+            Xb[g] = X[g, idx_full]
+
+        id_b = fit_normal(
+            Xb, draws=draws, tune=tune, chains=chains, seed=rng.integers(1_000_000_000),
+            progressbar=False, **fit_kwargs
+        )
+        bagged.append(id_b)
+
+        if show_progress and show_health:
+            try:
+                div = int(id_b.sample_stats["diverging"].values.sum())
+                iterator.set_postfix(divergences=div)
+            except Exception:
+                pass
+
+    # mixture by stacking draws (NOT chains)
+    id_bag = az.concat(bagged, dim="draw")
+    return {"trace": id_bag, "summary": eval_normal(id_bag)}
+
 # CONTAM
 def contaminate_scale_inflate(X,a,theta,groups=(0,),eps=0.1,scale_mult=5,seed=0):
     rng = np.random.default_rng(seed)
@@ -214,6 +286,24 @@ def predictive_density(trace,X,samples=2000,rng=None):
         total += (logsumexp(logp,axis=1)-np.log(S)).sum()
     return total / X.size
 
+def predictive_density_normal(trace, X, samples=2000, rng=None):
+    mu = flatten_draws(trace, "mu")      # (S, G)
+    sg = flatten_draws(trace, "sigma")   # (S, G)
+    S, G = mu.shape
+    if n_samps and S > n_samps:
+        rng = np.random.default_rng(None if rng is None else rng)
+        idx = rng.choice(S, n_samps, replace=False)
+        mu, sg = mu[idx], sg[idx]
+        S = n_samps
+
+    total = 0.0
+    X = np.asarray(X)
+    for g in range(G):
+        y = X[g]                              # (n,)
+        logp = sp_norm.logpdf(y[:, None], loc=mu[:, g], scale=sg[:, g])  # (n, S)
+        total += (np.log(np.exp(logp).mean(axis=1))).sum()               # log of posterior mean density
+    return total / X.size
+
 def posterior_means(trace):
     alpha = flatten_draws(trace,"alpha").mean(axis=0)
     theta = flatten_draws(trace,"theta").mean(axis=0)
@@ -236,56 +326,6 @@ def hyper_stability(trace_clean, trace_contam):
     keys = ["mu_log_a","mu_log_theta","sigma_log_a","sigma_log_theta"]
     return {k: abs(get(trace_contam,k) - get(trace_clean,k)) for k in keys}
 
-def evaluate_methods(X_clean, X_contam,
-                     trace_std_clean, trace_bag_clean,
-                     trace_std_contam, trace_bag_contam,
-                     true_alpha, true_theta,
-                     contam_idx, hdi_prob=0.90):
-    
-    # 1) Predictive accuracy (avg log predictive density)
-    lp_std_clean = predictive_density(trace_std_clean, X_clean)
-    lp_std_cont  = predictive_density(trace_std_contam,  X_contam)
-    lp_bag_clean = predictive_density(trace_bag_clean, X_clean)
-    lp_bag_cont  = predictive_density(trace_bag_contam,  X_contam)
-
-    # 2) Parameter recovery on contaminated fits
-    met_std_cont = param_recovery(trace_std_contam, true_alpha, true_theta, hdi_prob=hdi_prob)
-    met_bag_cont = param_recovery(trace_bag_contam, true_alpha, true_theta, hdi_prob=hdi_prob)
-
-    # 3) Stability on unaffected groups
-    clean_idx = ~np.array(contam_idx, dtype=bool)
-    stab_std = stability_delta(trace_std_clean, trace_std_contam, clean_idx, which="theta")
-    stab_bag = stability_delta(trace_bag_clean, trace_bag_contam, clean_idx, which="theta")
-
-    # 4) Coverage/width restricted to contaminated groups
-    cont_mask = np.array(contam_idx, dtype=bool)
-    th_hdi_std = met_std_cont["theta_hdi"][cont_mask]
-    th_hdi_bag = met_bag_cont["theta_hdi"][cont_mask]
-    th_true    = true_theta[cont_mask]
-    cover_std_theta = float(np.mean((th_true >= th_hdi_std[:,0]) & (th_true <= th_hdi_std[:,1])))
-    cover_bag_theta = float(np.mean((th_true >= th_hdi_bag[:,0]) & (th_true <= th_hdi_bag[:,1])))
-
-    # 5) Interval width ratios on contaminated groups (bag/std)
-    width_std = float(np.mean(th_hdi_std[:,1] - th_hdi_std[:,0])) if th_hdi_std.size else np.nan
-    width_bag = float(np.mean(th_hdi_bag[:,1] - th_hdi_bag[:,0])) if th_hdi_bag.size else np.nan
-    width_ratio = width_bag / width_std if np.isfinite(width_std) and width_std>0 else np.nan
-
-    # ---- print summary ----
-    print("\n=== Predictive accuracy (avg log pred density; higher is better) ===")
-    print(f"Standard: clean={lp_std_clean:.4f}, contam={lp_std_cont:.4f}, Δ={lp_std_cont - lp_std_clean:+.4f}")
-    print(f"BayesBag: clean={lp_bag_clean:.4f}, contam={lp_bag_cont:.4f}, Δ={lp_bag_cont - lp_bag_clean:+.4f}")
-
-    print("\n=== Stability on unaffected groups (mean |Δ θ_g|) ===")
-    print(f"Standard: {stab_std:.4f}   BayesBag: {stab_bag:.4f}")
-
-    print("\n=== Contaminated groups: coverage & width (θ) ===")
-    print(f"Cover{int(hdi_prob*100)} θ: std={cover_std_theta:.2f}, bag={cover_bag_theta:.2f}")
-    print(f"HDI width ratio (bag/std): {width_ratio:.2f}")
-
-    print("\n=== Parameter RMSE on contaminated fits (all groups) ===")
-    print(f"RMSE α: std={met_std_cont['alpha_rmse']:.3f}, bag={met_bag_cont['alpha_rmse']:.3f}")
-    print(f"RMSE θ: std={met_std_cont['theta_rmse']:.3f}, bag={met_bag_cont['theta_rmse']:.3f}")
-
 # MAIN
 def main():
     # FITTING
@@ -303,19 +343,10 @@ def main():
     trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=400,tune=200,chains=4)
     trace_bag_contam = trace_bb_contam["trace"]
 
-    # EVALUATION, PURELY CLEAN
-    # lp_std = predictive_density(trace_std,X)
-    # lp_bag = predictive_density(trace_bag,X)
-    # print(f"Avg log pred density – std: {lp_std:.4f}, bagged: {lp_bag:.4f}, Δ={lp_bag - lp_std:.4f}")
-
-    # m_std = param_recovery(trace_std,a,theta,hdi_prob=0.9)
-    # m_bag = param_recovery(trace_bag,a,theta,hdi_prob=0.9)
-    # print(f"RMSE α: std={m_std['alpha_rmse']:.3f}, bag={m_bag['alpha_rmse']:.3f}")
-    # print(f"RMSE θ: std={m_std['theta_rmse']:.3f}, bag={m_bag['theta_rmse']:.3f}")
-    # print(f"Cover90 α: std={m_std['alpha_cover']:.2f}, bag={m_bag['alpha_cover']:.2f}")
-    # print(f"Cover90 θ: std={m_std['theta_cover']:.2f}, bag={m_bag['theta_cover']:.2f}")
-    # print(f"HDI width α (bag/std): {m_bag['alpha_hdi_width']/m_std['alpha_hdi_width']:.2f}")
-    # print(f"HDI width θ (bag/std): {m_bag['theta_hdi_width']/m_std['theta_hdi_width']:.2f}")
+    # NORMAL
+    trace_std_norm = fit_normal(X, draws=400, tune=200, chains=4, seed=42)
+    norm_bag = bayesbag_normal(X, B=50, draws=400, tune=200, chains=4, seed=42, m_frac=1.0)
+    trace_bag_norm = norm_bag["trace"]
 
     # SAVING
     # Example meta you might want to record:
@@ -333,18 +364,14 @@ def main():
             trace_bag_clean=trace_bag_clean,
             trace_std_contam=trace_std_contam,
             trace_bag_contam=trace_bag_contam,
+            trace_std_norm=trace_std_norm,
+            trace_bag_norm=trace_bag_norm,
             true_alpha=a, true_theta=theta,
             contam_idx=[False, True, False, False, False, False, False, False, True, False],
             meta=meta)
     
     print("Saved bundle to:", outdir)
-    
-    # # EVALUATION, CLEAN AND CONTAM
-    # contam_groups = [False, True, False, False, False, False, False, False, True, False]
-    # evaluate_methods(X, Xc,
-    #              trace_std_clean, trace_bag_clean,
-    #              trace_std_contam, trace_bag_contam,
-    #              a, theta, contam_groups, hdi_prob=0.90)
 
 if __name__ == "__main__":
     main()
+    
