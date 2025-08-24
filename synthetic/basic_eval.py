@@ -378,7 +378,8 @@ if __name__ == "__main__":
         print("Usage: python evaluate.py <bundle_dir>")
         sys.exit(1)
     outdir = sys.argv[1]
-    (X, Xc, trace_std_clean, trace_bag_clean, trace_std_cont, trace_bag_cont,
-     a, theta, contam_idx, meta) = load_bundle(outdir)
-    evaluate_methods(X, Xc, trace_std_clean, trace_bag_clean, trace_std_cont, trace_bag_cont,
-                     a, theta, contam_idx, hdi_prob=0.90, print_table=True)
+    (X, Xc,trace_std_clean, trace_bag_clean, trace_std_cont, trace_bag_cont,trace_std_norm, trace_bag_norm,a, theta, contam_idx, meta) = load_bundle(outdir)
+    evaluate_methods(X, Xc,trace_std_clean, trace_bag_clean,trace_std_cont, trace_bag_cont,a, theta, contam_idx,hdi_prob=0.90, print_table=True,
+                     trace_std_norm=trace_std_norm, trace_bag_norm=trace_bag_norm
+    )
+
