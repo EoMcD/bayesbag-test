@@ -19,12 +19,16 @@ data = payload_std["data"]
 data["g"] = data["g"].astype("category")
 data["t"] = data["t"].astype("category")
 
+print("here")
+
 with open("out/microcredit_bayesbag.pkl", "rb") as f:
     payload_bag = pickle.load(f)
 bayesbag_fits = payload_bag["bayesbag"]
 
 K = standard_fit["theta"]["k"].nunique()
 sites = [f"Site {i+1}" for i in range(K)]
+
+print("here")
 
 # ----------------------------
 # Helpers: stack draws, HDI, predictive
