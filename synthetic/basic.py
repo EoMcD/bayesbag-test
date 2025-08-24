@@ -229,12 +229,12 @@ def stability_delta(trace_clean,trace_contam,clean_idx,which="theta"):
     else:
         raise ValueError("hich must be 'theta' or 'alpha")
     
-def hyper_stability(idata_clean, idata_contam):
+def hyper_stability(trace_clean, trace_contam):
     def get(idata, name):
         x = idata.posterior[name].stack(sample=("chain","draw")).values
         return float(x.mean())
     keys = ["mu_log_a","mu_log_theta","sigma_log_a","sigma_log_theta"]
-    return {k: abs(get(idata_contam,k) - get(idata_clean,k)) for k in keys}
+    return {k: abs(get(trace_contam,k) - get(trace_clean,k)) for k in keys}
 
 def evaluate_methods(X_clean, X_contam,
                      trace_std_clean, trace_bag_clean,
@@ -325,14 +325,10 @@ def main():
         eps=0.1, scale_mult=6, contam_groups=[1, 8],
         draws=400, tune=200, chains=4, B=50, m_frac=1.0
     )
-    
-    outdir = default_run_dir()  # e.g., runs/20250824_153210
-    save_bundle(outdir,
-                X_clean=X, X_contam=Xc,
-                id_std_clean=trace_std_clean,
-                id_bag_clean=trace_bag_clean,
-                id_std_contam=trace_std_contam,
-                id_bag_contam=trace_bag_contam,
+    d
+                trace_bag_clean=trace_bag_clean,
+                trace_std_contam=trace_std_contam,
+                trace_bag_contam=trace_bag_contam,
                 true_alpha=a, true_theta=theta,
                 contam_idx=[False, True, False, False, False, False, False, False, True, False],
                 meta=meta)
