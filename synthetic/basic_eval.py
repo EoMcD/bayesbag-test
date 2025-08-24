@@ -34,13 +34,24 @@ def flatten_draws(trace, var):
         return da.transpose("sample","group").values
     return da.transpose("sample", other[0]).values
 
-def hdi_2col(draws_2d, prob=0.90):
-    # Add a singleton 'chain' dim so ArviZ sees ('chain','draw') core dims
-    da = xr.DataArray(draws_2d[None, ...], dims=("chain", "draw", "group"))
-    h = az.hdi(da, hdi_prob=prob)  # dims: ('group','hdi')
-    return np.stack([h.sel(hdi="lower").values,
-                     h.sel(hdi="higher").values], axis=1)
-
+def hdi_min_width(draws_2d, prob=0.90):
+    """
+    Robust HDI for each group via sliding-window min-width interval.
+    draws_2d: array of shape (S, G) with S posterior draws.
+    Returns: (G, 2) array of [lower, upper] bounds.
+    """
+    S, G = draws_2d.shape
+    k = max(1, int(np.ceil(prob * S)))
+    out = np.empty((G, 2), dtype=float)
+    for g in range(G):
+        s = np.sort(draws_2d[:, g])
+        if k >= S:
+            out[g] = [s[0], s[-1]]
+            continue
+        widths = s[k-1:] - s[:S-k+1]
+        j = int(np.argmin(widths))
+        out[g] = [s[j], s[j+k-1]]
+    return out
 
 def posterior_rank(draws_2d, truth_1d):
     return (draws_2d <= truth_1d).mean(axis=0)
@@ -95,7 +106,7 @@ def evaluate_methods(
     # Contaminated groups: coverage & width (θ)
     tS = flatten_draws(trace_std_cont, "theta")
     tB = flatten_draws(trace_bag_cont, "theta")
-    hS = hdi_2col(tS, hdi_prob); hB = hdi_2col(tB, hdi_prob)
+    hS = hdi_min_width(tS, hdi_prob); hB = hdi_min_width(tB, hdi_prob)
     cover_std = np.mean((true_theta[contam_idx] >= hS[contam_idx,0]) &
                         (true_theta[contam_idx] <= hS[contam_idx,1]))
     cover_bag = np.mean((true_theta[contam_idx] >= hB[contam_idx,0]) &
