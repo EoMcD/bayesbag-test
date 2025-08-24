@@ -74,6 +74,17 @@ def mismatch_index_theta(trace_std, trace_bag, X_like):
     MvsM = N * float(np.sum(stdB**2))
     return 1 - ((2 * NvN) / MvsM) if MvsM > NvN else np.nan
 
+def mismatch_index_var(trace_std, trace_bag, var_name, X_like):
+    vS = flatten_draws(trace_std, var_name)  # (S,G)
+    vB = flatten_draws(trace_bag, var_name)
+    stdS = vS.std(axis=0, ddof=1)
+    stdB = vB.std(axis=0, ddof=1)
+    N = X_like.size
+    NvN = N * float(np.sum(stdS**2))
+    MvsM = N * float(np.sum(stdB**2))
+    return 1 - ((2 * NvN) / MvsM) if MvsM > NvN else np.nan
+
+
 def posterior_rank(draws_2d, truth_1d):
     return (draws_2d <= truth_1d).mean(axis=0)
 
@@ -373,8 +384,8 @@ def evaluate_methods(
               f"bag={np.mean(m_bagN['sg_rank']):.2f}±{np.std(m_bagN['sg_rank']):.2f}")
 
         # Mismatch index for Normal model (μ and σ)
-        mi_mu = mismatch_index_theta(trace_std_norm, trace_bag_norm, "mu", X_clean)
-        mi_sg = mismatch_index_theta(trace_std_norm, trace_bag_norm, "sigma", X_clean)
+        mi_mu = mismatch_index_var(trace_std_norm, trace_bag_norm, "mu", X_clean)
+        mi_sg = mismatch_index_var(trace_std_norm, trace_bag_norm, "sigma", X_clean)
         print("\n=== [Normal, clean data] Mismatch index (μ, σ) ===")
         print(f"Mismatch μ: {mi_mu:.4f}" if np.isfinite(mi_mu) else "Mismatch μ: nan")
         print(f"Mismatch σ: {mi_sg:.4f}" if np.isfinite(mi_sg) else "Mismatch σ: nan")
