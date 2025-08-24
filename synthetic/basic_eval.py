@@ -53,6 +53,16 @@ def hdi_min_width(draws_2d, prob=0.90):
         out[g] = [s[j], s[j+k-1]]
     return out
 
+def mismatch_index_theta(trace_std, trace_bag, X_like):
+    tS = flatten_draws(trace_std, "theta")  # (S,G)
+    tB = flatten_draws(trace_bag, "theta")
+    stdS = tS.std(axis=0, ddof=1)
+    stdB = tB.std(axis=0, ddof=1)
+    N = X_like.size
+    NvN = N * float(np.sum(stdS**2))
+    MvsM = N * float(np.sum(stdB**2))
+    return 1 - ((2 * NvN) / MvsM) if MvsM > NvN else np.nan
+
 def posterior_rank(draws_2d, truth_1d):
     return (draws_2d <= truth_1d).mean(axis=0)
 
@@ -123,6 +133,10 @@ def evaluate_methods(
     print("\n=== Posterior rank of θ_true on contaminated groups (0=low, 0.5=center, 1=high) ===")
     for g in np.where(contam_idx)[0]:
         print(f"g={g}: rank_std={rS[g]:.3f}, rank_bag={rB[g]:.3f}")
+
+    mi = mismatch_index_theta(trace_std_cont, trace_bag_cont, X_contam)
+    print(f"\n=== Mismatch index (θ, contaminated fit) ===")
+    print(f"Mismatch index: {mi:.4f}" if np.isfinite(mi) else "Mismatch index: nan")
 
     # Optional per-group table
     if print_table and contam_idx.any():
