@@ -1,10 +1,12 @@
 import os
 import pickle
 import numpy as np
+from numpy import log, exp
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.special import logsumexp
 from scipy.stats import norm as sp_norm
+from tqdm.auto import tqdm
 
 os.makedirs("figs", exist_ok=True)
 
@@ -59,6 +61,52 @@ def hdi_min_width(draws_2d, prob=0.90):
         out[g] = [s[j], s[j+k-1]]
     return out
 
+def avg_log_pred_density_chunked(mu, ta, sg, df, draw_batch=20000, progress=True):
+    S, K = mu.shape
+    y   = df["y"].to_numpy()
+    gix = df["g"].cat.codes.to_numpy()    # 0..K-1
+    tit = df["t"].cat.codes.to_numpy()    # 0/1
+    total_sum = 0.0
+    N = len(y)
+
+    for k in range(K):
+        for arm in (0, 1):
+            mask = (gix == k) & (tit == arm)
+            if not mask.any():
+                continue
+            y_sub = y[mask]                    # (n_sub,)
+            n_sub = y_sub.size
+            # Streaming log-sum-exp accumulators per observation
+            m_vec = None   # max logp across processed chunks, shape (n_sub,)
+            s_vec = None   # sum exp(logp - m_vec), shape (n_sub,)
+
+            draw_range = range(0, S, draw_batch)
+            if progress:
+                draw_range = tqdm(draw_range, desc=f"ALPD k={k} arm={arm}", unit="chunk")
+
+            for start in draw_range:
+                end = min(start + draw_batch, S)
+                # chunked draws for this site
+                loc_chunk = mu[start:end, k] + (ta[start:end, k] if arm == 1 else 0.0)   # (B,)
+                sc_chunk  = sg[start:end, k]                                            # (B,)
+                # logpdf for all obs in this subset vs this draw-chunk -> (n_sub, B)
+                lp = sp_norm.logpdf(y_sub[:, None], loc=loc_chunk[None, :], scale=sc_chunk[None, :])
+
+                max_lp = lp.max(axis=1)                 # (n_sub,)
+                if m_vec is None:
+                    m_vec = max_lp
+                    s_vec = np.exp(lp - m_vec[:, None]).sum(axis=1)
+                else:
+                    m_new = np.maximum(m_vec, max_lp)
+                    s_vec = s_vec * np.exp(m_vec - m_new) + np.exp(lp - m_new[:, None]).sum(axis=1)
+                    m_vec = m_new
+
+            # log mean density across ALL draws for this subset
+            logmean = np.log(s_vec) + m_vec - np.log(S)   # (n_sub,)
+            total_sum += logmean.sum()
+
+    return total_sum / N
+
 def avg_log_pred_density_from_theta(fit, df):
     """
     Compute average log predictive density per observation under the posterior mixture.
@@ -88,13 +136,13 @@ def avg_log_pred_density_from_theta(fit, df):
 # ----------------------------
 muS, tauS, sigS = stack_theta_draws(standard_fit)
 
-muB, tauB, sigB = [], [], []
-for fit in bayesbag_fits:
+muB_list, tauB_list, sigB_list = [], [], []
+for fit in tqdm(bayesbag_fits, desc="Stack bagged draws", unit="fit"):
     m, t, s = stack_theta_draws(fit)
-    muB.append(m); tauB.append(t); sigB.append(s)
-muB = np.vstack(muB)   # (S_total, K)
-tauB = np.vstack(tauB)
-sigB = np.vstack(sigB)
+    muB_list.append(m); tauB_list.append(t); sigB_list.append(s)
+muB = np.vstack(muB_list)   # (S_total, K)
+tauB = np.vstack(tauB_list)
+sigB = np.vstack(sigB_list)
 
 # ----------------------------
 # Summaries per site
@@ -110,18 +158,27 @@ tau_bag_hdi  = hdi_min_width(tauB, 0.90)
 # ----------------------------
 # Predictive accuracy (ALPD)
 # ----------------------------
-alpd_std = avg_log_pred_density_from_theta(standard_fit, data)
-theta_bag_df = []
-offset = 0
-for bf in bayesbag_fits:
-    th = bf["theta"].copy()
-    th["j"] = th["j"] + offset
-    offset = th["j"].max()
-    theta_bag_df.append(th)
-bag_fit = {"theta": pd.concat(theta_bag_df, ignore_index=True)}
-alpd_bag = avg_log_pred_density_from_theta(bag_fit, data)
+# alpd_std = avg_log_pred_density_from_theta(standard_fit, data)
+# theta_bag_df = []
+# offset = 0
+# for bf in bayesbag_fits:
+#     th = bf["theta"].copy()
+#     th["j"] = th["j"] + offset
+#     offset = th["j"].max()
+#     theta_bag_df.append(th)
+# bag_fit = {"theta": pd.concat(theta_bag_df, ignore_index=True)}
+# alpd_bag = avg_log_pred_density_from_theta(bag_fit, data)
+
+# print(f"\nAvg log predictive density — standard={alpd_std:.4f}  bayesbag={alpd_bag:.4f}  Δ={alpd_bag - alpd_std:+.4f}")
+
+# ----------------------------
+# Predictive accuracy (ALPD)
+# ----------------------------
+alpd_std = avg_log_pred_density_chunked(muS, tauS, sigS, data, draw_batch=20000, progress=True)
+alpd_bag = avg_log_pred_density_chunked(muB, tauB, sigB, data, draw_batch=20000, progress=True)
 
 print(f"\nAvg log predictive density — standard={alpd_std:.4f}  bayesbag={alpd_bag:.4f}  Δ={alpd_bag - alpd_std:+.4f}")
+
 
 # ----------------------------
 # Plots: τ posterior intervals per site
