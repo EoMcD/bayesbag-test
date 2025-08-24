@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import gamma,norm
+from scipy.stats import gamma
+from scipy.stats import norm as sp_norm
 from scipy.special import logsumexp
 import pymc as pm
 import arviz as az
@@ -114,7 +115,12 @@ def bayesbag_gamma(X, B=50, draws=4000, tune=2000, chains=4,
     return {"trace": trace_bagged, "summary": summary}
 
 # NORMAL MODEL
-def fit_normal(X, draws=4000, tune=200, chains=4, seed=None, progressbar=False, prior_mu_loc=6.0, prior_mu_scale=2.0, prior_tau_scale=2.0):
+def fit_normal(
+    X, draws=4000, tune=200, chains=4, seed=None, progressbar=False,
+    prior_mu_loc=6.0, prior_mu_scale=2.0,
+    prior_tau_scale=2.0,
+    prior_sigma_median=3.5, prior_sigma_log_sd=0.5,
+):
     X = np.asarray(X); G = X.shape[0]
 
     with pm.Model(coords={"group": np.arange(G)}) as m:
@@ -122,11 +128,11 @@ def fit_normal(X, draws=4000, tune=200, chains=4, seed=None, progressbar=False, 
         mu_mu = pm.Normal("mu_mu", mu=prior_mu_loc, sigma=prior_mu_scale)
         tau_mu = pm.HalfNormal("tau_mu", sigma=prior_tau_scale)
 
-        mu_log_sigma = pm.Normal("mu_log_sigma", mu=np.log(prior_sigma_median), sigma=prior_sigma_log_sd)
+        mu_log_sigma    = pm.Normal("mu_log_sigma",    mu=np.log(prior_sigma_median), sigma=prior_sigma_log_sd)
         sigma_log_sigma = pm.HalfNormal("sigma_log_sigma", sigma=prior_sigma_log_sd)
 
         # group-level params
-        mu = pm.Normal("mu", mu=mu_mu, sigma=tau_mu, dims="group")
+        mu    = pm.Normal("mu",    mu=mu_mu,    sigma=tau_mu,          dims="group")
         sigma = pm.LogNormal("sigma", mu=mu_log_sigma, sigma=sigma_log_sigma, dims="group")
 
         # likelihood
@@ -145,10 +151,12 @@ def eval_normal(idata, hdi=0.90):
     keys = ["mu_mu","tau_mu","mu_log_sigma","sigma_log_sigma","mu","sigma"]
     return az.summary(post[keys], hdi_prob=hdi)
 
-def bayesbag_normal(X, B=50, draws=400, tune=2000, chains=4, seed=0, show_progress=True, show_health=True, m_frac=1.0, **fit_kwargs):
+def bayesbag_normal(
+    X, B=50, draws=400, tune=2000, chains=4, seed=0,
+    show_progress=True, show_health=True, m_frac=1.0, **fit_kwargs
+):
     rng = np.random.default_rng(seed)
-    X = np.asarray(X)
-    groups, per_group = X.shape
+    X = np.asarray(X); G, n = X.shape
 
     bagged = []
     iterator = range(B)
@@ -157,20 +165,21 @@ def bayesbag_normal(X, B=50, draws=400, tune=2000, chains=4, seed=0, show_progre
 
     for b in iterator:
         Xb = np.empty_like(X)
-        m=mfactor*per_group
-        for g in range(groups):
-            seed_b = rng.integers(1_000_000_000)
-            idx_m = rng.integers(0, per_group, size=m)
-            # if m < per_group:                                    
-            #     pad = rng.integers(0, m, size=per_group - m)
-            #     idx_full = np.concatenate([idx_m, idx_m[pad]])
-            # else:
-            #     idx_full = rng.integers(0, per_group, size=per_group)
+        m = max(1, int(round(m_frac * n)))
+        for g in range(G):
+            # sample m with replacement from the group, then pad back to length n
+            idx_m = rng.integers(0, n, size=m)
+            if m < n:
+                pad = rng.integers(0, m, size=n - m)
+                idx_full = np.concatenate([idx_m, idx_m[pad]])
+            else:
+                # ordinary bootstrap of length n
+                idx_full = rng.integers(0, n, size=n)
             Xb[g] = X[g, idx_full]
 
         id_b = fit_normal(
-            Xb, draws=draws, tune=tune, chains=chains, seed=rng.integers(1_000_000_000),
-            progressbar=False, **fit_kwargs
+            Xb, draws=draws, tune=tune, chains=chains,
+            seed=rng.integers(1_000_000_000), progressbar=False, **fit_kwargs
         )
         bagged.append(id_b)
 
@@ -181,9 +190,9 @@ def bayesbag_normal(X, B=50, draws=400, tune=2000, chains=4, seed=0, show_progre
             except Exception:
                 pass
 
-    # mixture by stacking draws (NOT chains)
-    id_bag = az.concat(bagged, dim="draw")
+    id_bag = az.concat(bagged, dim="draw")  # mixture along draws
     return {"trace": id_bag, "summary": eval_normal(id_bag)}
+
 
 # CONTAM
 def contaminate_scale_inflate(X,a,theta,groups=(0,),eps=0.1,scale_mult=5,seed=0):
@@ -200,6 +209,7 @@ def save_bundle(outdir,
                 X_clean, X_contam,
                 trace_std_clean, trace_bag_clean,
                 trace_std_contam, trace_bag_contam,
+                trace_std_norm, trace_bag_norm,
                 true_alpha, true_theta, contam_idx,
                 meta=None):
     os.makedirs(outdir, exist_ok=True)
@@ -210,7 +220,7 @@ def save_bundle(outdir,
              true_alpha=true_alpha, true_theta=true_theta,
              contam_idx=np.array(contam_idx, dtype=bool))
 
-    # traces (ArviZ InferenceData)
+    # traces
     trace_std_clean.to_netcdf(os.path.join(outdir, "trace_std_clean.nc"))
     trace_bag_clean.to_netcdf(os.path.join(outdir, "trace_bag_clean.nc"))
     trace_std_contam.to_netcdf(os.path.join(outdir, "trace_std_contam.nc"))
@@ -218,7 +228,7 @@ def save_bundle(outdir,
     trace_std_norm.to_netcdf(os.path.join(outdir, "trace_std_norm.nc"))
     trace_bag_norm.to_netcdf(os.path.join(outdir, "trace_bag_norm.nc"))
 
-    # metadata/config
+    # metadata
     meta = {} if meta is None else dict(meta)
     meta.setdefault("created_at", datetime.now().isoformat(timespec="seconds"))
     with open(os.path.join(outdir, "meta.json"), "w") as f:
@@ -228,7 +238,6 @@ def default_run_dir(root="runs"):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     outdir = os.path.join(root, ts)
     return outdir
-
 
 # EVAL
 def flatten_draws(trace, var):
@@ -292,18 +301,18 @@ def predictive_density_normal(trace, X, samples=2000, rng=None):
     mu = flatten_draws(trace, "mu")      # (S, G)
     sg = flatten_draws(trace, "sigma")   # (S, G)
     S, G = mu.shape
-    if n_samps and S > n_samps:
+    if samples and S > samples:
         rng = np.random.default_rng(None if rng is None else rng)
-        idx = rng.choice(S, n_samps, replace=False)
+        idx = rng.choice(S, samples, replace=False)
         mu, sg = mu[idx], sg[idx]
-        S = n_samps
+        S = samples
 
     total = 0.0
     X = np.asarray(X)
     for g in range(G):
-        y = X[g]                              # (n,)
+        y = X[g]
         logp = sp_norm.logpdf(y[:, None], loc=mu[:, g], scale=sg[:, g])  # (n, S)
-        total += (np.log(np.exp(logp).mean(axis=1))).sum()               # log of posterior mean density
+        total += (logsumexp(logp, axis=1) - np.log(S)).sum()
     return total / X.size
 
 def posterior_means(trace):
@@ -331,23 +340,23 @@ def hyper_stability(trace_clean, trace_contam):
 # MAIN
 def main():
     # FITTING
-    trace_std_clean = fit_gamma(X,draws=400,tune=200,chains=4)
+    trace_std_clean = fit_gamma(X,draws=200,tune=100,chains=4)
     # print(eval_gamma(trace_std_clean))
 
-    trace_bb_clean = bayesbag_gamma(X,B=50,draws=400,tune=200,chains=4)
+    trace_bb_clean = bayesbag_gamma(X,B=50,draws=200,tune=100,chains=4)
     # print(trace_bb_clean["summary"])
     trace_bag_clean = trace_bb_clean["trace"]
 
     # CONTAMINATION
     Xc = contaminate_scale_inflate(X,a,theta,groups=(1,8),eps=0.1,scale_mult=6,seed=42)
 
-    trace_std_contam = fit_gamma(Xc,draws=400,tune=200,chains=4)
-    trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=400,tune=200,chains=4)
+    trace_std_contam = fit_gamma(Xc,draws=200,tune=100,chains=4)
+    trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=200,tune=100,chains=4)
     trace_bag_contam = trace_bb_contam["trace"]
 
     # NORMAL
-    trace_std_norm = fit_normal(X, draws=400, tune=200, chains=4, seed=42)
-    norm_bag = bayesbag_normal(X, B=50, draws=400, tune=200, chains=4, seed=42, m_frac=1.0)
+    trace_std_norm = fit_normal(X, draws=200, tune=100, chains=4, seed=42)
+    norm_bag = bayesbag_normal(X, B=50, draws=200, tune=100, chains=4, seed=42, m_frac=1.0)
     trace_bag_norm = norm_bag["trace"]
 
     # SAVING
@@ -356,7 +365,7 @@ def main():
         groups=int(X.shape[0]),
         per_group=int(X.shape[1]),
         eps=0.1, scale_mult=6, contam_groups=[1, 8],
-        draws=400, tune=200, chains=4, B=50, m_frac=1.0
+        draws=200, tune=100, chains=4, B=50, m_frac=1.0
     )
 
     outdir = default_run_dir()  # e.g., runs/20250824_153210
