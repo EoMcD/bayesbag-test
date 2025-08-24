@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gamma
-from scipy.stats import norm as sp_norm
+from scipy.stats import norm
 from scipy.special import logsumexp
 import pymc as pm
 import arviz as az
@@ -311,7 +311,7 @@ def predictive_density_normal(trace, X, samples=2000, rng=None):
     X = np.asarray(X)
     for g in range(G):
         y = X[g]
-        logp = sp_norm.logpdf(y[:, None], loc=mu[:, g], scale=sg[:, g])  # (n, S)
+        logp = norm.logpdf(y[:, None], loc=mu[:, g], scale=sg[:, g])  # (n, S)
         total += (logsumexp(logp, axis=1) - np.log(S)).sum()
     return total / X.size
 
