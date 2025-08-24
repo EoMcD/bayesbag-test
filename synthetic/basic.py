@@ -340,23 +340,23 @@ def hyper_stability(trace_clean, trace_contam):
 # MAIN
 def main():
     # FITTING
-    trace_std_clean = fit_gamma(X,draws=200,tune=100,chains=4)
+    trace_std_clean = fit_gamma(X,draws=2000,tune=1000,chains=4)
     # print(eval_gamma(trace_std_clean))
 
-    trace_bb_clean = bayesbag_gamma(X,B=50,draws=200,tune=100,chains=4)
+    trace_bb_clean = bayesbag_gamma(X,B=50,draws=2000,tune=1000,chains=4)
     # print(trace_bb_clean["summary"])
     trace_bag_clean = trace_bb_clean["trace"]
 
     # CONTAMINATION
     Xc = contaminate_scale_inflate(X,a,theta,groups=(1,8),eps=0.1,scale_mult=6,seed=42)
 
-    trace_std_contam = fit_gamma(Xc,draws=200,tune=100,chains=4)
-    trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=200,tune=100,chains=4)
+    trace_std_contam = fit_gamma(Xc,draws=2000,tune=1000,chains=4)
+    trace_bb_contam = bayesbag_gamma(Xc,B=50,draws=2000,tune=1000,chains=4)
     trace_bag_contam = trace_bb_contam["trace"]
 
     # NORMAL
-    trace_std_norm = fit_normal(X, draws=200, tune=100, chains=4, seed=42)
-    norm_bag = bayesbag_normal(X, B=50, draws=200, tune=100, chains=4, seed=42, m_frac=1.0)
+    trace_std_norm = fit_normal(X, draws=2000, tune=1000, chains=4, seed=42)
+    norm_bag = bayesbag_normal(X, B=50, draws=2000, tune=1000, chains=4, seed=42, m_frac=1.0)
     trace_bag_norm = norm_bag["trace"]
 
     # SAVING
@@ -365,7 +365,7 @@ def main():
         groups=int(X.shape[0]),
         per_group=int(X.shape[1]),
         eps=0.1, scale_mult=6, contam_groups=[1, 8],
-        draws=200, tune=100, chains=4, B=50, m_frac=1.0
+        draws=2000, tune=1000, chains=4, B=50, m_frac=1.0
     )
 
     outdir = default_run_dir()  # e.g., runs/20250824_153210
