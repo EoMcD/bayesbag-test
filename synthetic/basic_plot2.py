@@ -88,7 +88,7 @@ def variance_ratio_from_mismatch(I):
 
 def plot_evaluation(outdir, save_dir=None, hdi_prob=0.90, samples_lpd=2000):
     if save_dir is None:
-        save_dir = os.path.join(outdir, "figs")
+        save_dir = os.path.join(outdir, "figs_basic")
     os.makedirs(save_dir, exist_ok=True)
 
     # Load everything (Normal traces may be None if you didn't save them)
@@ -305,5 +305,5 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python plots_synth.py <bundle_dir> [<save_dir>]"); raise SystemExit(1)
     outdir = sys.argv[1]
-    save_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(outdir, "figs")
+    save_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(outdir, "figs_basic")
     plot_evaluation(outdir, save_dir)
