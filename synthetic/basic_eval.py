@@ -390,6 +390,30 @@ def evaluate_methods(
         print(f"Mismatch μ: {mi_mu:.4f}" if np.isfinite(mi_mu) else "Mismatch μ: nan")
         print(f"Mismatch σ: {mi_sg:.4f}" if np.isfinite(mi_sg) else "Mismatch σ: nan")
 
+def mcse_from_concat(idata_bag, var, B, draws_per_chain):
+    da = idata_bag.posterior[var]  # dims: ('chain','draw', group_dim)
+    # find the group dimension name (e.g., 'alpha_dim_0' or 'theta_dim_0' or 'group')
+    group_dims = [d for d in da.dims if d not in ("chain", "draw")]
+    assert len(group_dims) == 1, f"Expected one group dim for {var}, got {group_dims}"
+    group_dim = group_dims[0]
+
+    # average over chains first
+    chain_mean = da.mean(dim="chain")  # dims: ('draw', group_dim)
+
+    # how many draws per bootstrap across ALL chains? Still draws_per_chain per chain, we slice along draw only
+    per_b_means = []
+    for b in range(B):
+        sl = slice(b * draws_per_chain, (b + 1) * draws_per_chain)
+        # mean over the slice of draws for this bootstrap
+        m_b = chain_mean.isel(draw=sl).mean(dim="draw").values   # (G,)
+        per_b_means.append(m_b)
+
+    M = np.vstack(per_b_means)                 # (B,G)
+    s = M.std(axis=0, ddof=1)
+    return s / np.sqrt(B)
+
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
@@ -401,3 +425,8 @@ if __name__ == "__main__":
                      trace_std_norm=trace_std_norm, trace_bag_norm=trace_bag_norm
     )
 
+        # Example for your clean gamma bag:
+    B = 50
+    draws_per_chain = 2000   # <-- set to whatever you used in fit_gamma(draws=...)
+    mcse_theta_clean = mcse_from_concat(trace_bag_clean, var="theta", B=B, draws_per_chain=draws_per_chain)
+    print("MCSE θ per group (clean):", np.round(mcse_theta_clean, 4))
