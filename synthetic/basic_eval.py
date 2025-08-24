@@ -35,9 +35,12 @@ def flatten_draws(trace, var):
     return da.transpose("sample", other[0]).values
 
 def hdi_2col(draws_2d, prob=0.90):
-    da = xr.DataArray(draws_2d, dims=("draw","group"))
-    h = az.hdi(da, hdi_prob=prob)
-    return np.stack([h.sel(hdi="lower").values, h.sel(hdi="higher").values], axis=1)
+    # Add a singleton 'chain' dim so ArviZ sees ('chain','draw') core dims
+    da = xr.DataArray(draws_2d[None, ...], dims=("chain", "draw", "group"))
+    h = az.hdi(da, hdi_prob=prob)  # dims: ('group','hdi')
+    return np.stack([h.sel(hdi="lower").values,
+                     h.sel(hdi="higher").values], axis=1)
+
 
 def posterior_rank(draws_2d, truth_1d):
     return (draws_2d <= truth_1d).mean(axis=0)
