@@ -215,6 +215,8 @@ def save_bundle(outdir,
     trace_bag_clean.to_netcdf(os.path.join(outdir, "trace_bag_clean.nc"))
     trace_std_contam.to_netcdf(os.path.join(outdir, "trace_std_contam.nc"))
     trace_bag_contam.to_netcdf(os.path.join(outdir, "trace_bag_contam.nc"))
+    trace_std_norm.to_netcdf(os.path.join(outdir, "trace_std_norm.nc"))
+    trace_bag_norm.to_netcdf(os.path.join(outdir, "trace_bag_norm.nc"))
 
     # metadata/config
     meta = {} if meta is None else dict(meta)
