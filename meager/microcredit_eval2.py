@@ -23,7 +23,7 @@ data["t"] = data["t"].astype("category")
 
 print("here")
 
-with open("out/microcredit_bayesbag.pkl", "rb") as f:
+with open("out/microcredit_bayesbag_b100.pkl", "rb") as f:
     payload_bag = pickle.load(f)
 bayesbag_fits = payload_bag["bayesbag"]
 
