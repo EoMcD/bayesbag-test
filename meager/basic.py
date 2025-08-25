@@ -120,7 +120,7 @@ print("Models made")
 # --- BAYESBAG PART, WIP ---
 from sklearn.utils import resample
 
-B = 50
+B = 100
 boot_fits, boot_data = [], []
 
 for i in range(B):
@@ -135,7 +135,7 @@ for i in range(B):
     fit = fit_meager(boot_i)
     boot_fits.append(fit)
 
-with open("out/microcredit_bayesbag.pkl", "wb") as f:
+with open("out/microcredit_bayesbag_b100.pkl", "wb") as f:
     pickle.dump({"bayesbag": boot_fits, "boot_data": boot_data}, f)
 
 with open("out/microcredit.pkl", "wb") as f:
